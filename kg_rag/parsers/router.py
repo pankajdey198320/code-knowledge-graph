@@ -17,6 +17,13 @@ _EXTENSION_MAP: dict[str, str] = {
     ".hpp": "cpp",
     ".hxx": "cpp",
     ".cs": "csharp",
+    ".f": "fortran",
+    ".f90": "fortran",
+    ".f95": "fortran",
+    ".f03": "fortran",
+    ".f08": "fortran",
+    ".for": "fortran",
+    ".fpp": "fortran",
 }
 
 
@@ -30,6 +37,9 @@ def _get_parser(lang: str) -> BaseCodeParser:
     elif lang == "csharp":
         from kg_rag.parsers.csharp_parser import CSharpParser
         return CSharpParser()
+    elif lang == "fortran":
+        from kg_rag.parsers.fortran_parser import FortranParser
+        return FortranParser()
     raise ValueError(f"No parser for language: {lang}")
 
 
