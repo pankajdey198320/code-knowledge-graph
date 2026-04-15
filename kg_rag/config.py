@@ -37,6 +37,7 @@ class Settings:
             ".git,node_modules,__pycache__,.venv,bin,obj,Debug,Release,build,dist",
         ).split(",")
     )
+    ACTIVE_PROJECT: str = os.getenv("ACTIVE_PROJECT", "_full_")
 
     # Paths
     PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent

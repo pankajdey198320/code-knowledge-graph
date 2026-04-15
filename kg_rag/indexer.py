@@ -16,21 +16,33 @@ def discover_files(
     repo_root: Path,
     extensions: list[str] | None = None,
     skip_dirs: set[str] | None = None,
+    scope_paths: list[Path] | None = None,
 ) -> list[Path]:
-    """Walk *repo_root* recursively and collect matching source files."""
+    """Walk *repo_root* (or scoped sub-dirs) and collect matching source files.
+
+    Args:
+        scope_paths: If provided, only search within these directories instead
+            of the full *repo_root*.
+    """
     extensions = extensions or settings.INDEX_EXTENSIONS
     skip_dirs = skip_dirs or settings.SKIP_DIRS
 
+    roots = scope_paths if scope_paths else [repo_root]
+
     matched: list[Path] = []
-    for path in repo_root.rglob("*"):
-        if path.is_dir():
+    for root in roots:
+        root = root.resolve()
+        if not root.exists():
             continue
-        # Skip excluded directories
-        if skip_dirs and any(part in skip_dirs for part in path.parts):
-            continue
-        if path.suffix in extensions and language_for_extension(path.suffix) is not None:
-            matched.append(path)
-    return sorted(matched)
+        for path in root.rglob("*"):
+            if path.is_dir():
+                continue
+            # Skip excluded directories
+            if skip_dirs and any(part in skip_dirs for part in path.parts):
+                continue
+            if path.suffix in extensions and language_for_extension(path.suffix) is not None:
+                matched.append(path)
+    return sorted(set(matched))
 
 
 def index_repo(
@@ -38,10 +50,17 @@ def index_repo(
     extensions: list[str] | None = None,
     skip_dirs: set[str] | None = None,
     show_progress: bool = True,
+    scope_paths: list[Path] | None = None,
 ) -> KnowledgeGraph:
-    """Parse every supported source file in *repo_root* and merge into one KG."""
+    """Parse every supported source file and merge into one KG.
+
+    Args:
+        scope_paths: If provided, only index these sub-directories.
+    """
     repo_root = (repo_root or settings.REPO_ROOT).resolve()
-    files = discover_files(repo_root, extensions=extensions, skip_dirs=skip_dirs)
+    files = discover_files(
+        repo_root, extensions=extensions, skip_dirs=skip_dirs, scope_paths=scope_paths,
+    )
 
     kg = KnowledgeGraph()
     iterator = tqdm(files, desc="Indexing", disable=not show_progress)

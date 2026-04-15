@@ -1,10 +1,22 @@
 {
   "servers": {
-    "code-knowledge-graph": {
+    "kg-BladedNG": {
       "type": "stdio",
       "command": "w:/git/Learnig Lab/KG/.venv/Scripts/python.exe",
       "args": ["-m", "kg_rag.mcp_server"],
-      "cwd": "w:/git/Learnig Lab/KG"
+      "cwd": "w:/git/Learnig Lab/KG",
+      "env": {
+        "ACTIVE_PROJECT": "BladedNG"
+      }
+    },
+    "kg-Upgrader": {
+      "type": "stdio",
+      "command": "w:/git/Learnig Lab/KG/.venv/Scripts/python.exe",
+      "args": ["-m", "kg_rag.mcp_server"],
+      "cwd": "w:/git/Learnig Lab/KG",
+      "env": {
+        "ACTIVE_PROJECT": "Upgrader"
+      }
     }
   }
 }

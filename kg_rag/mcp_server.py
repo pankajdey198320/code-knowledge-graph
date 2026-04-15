@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP
 from kg_rag.config import settings
 from kg_rag.indexer import index_repo, load_graph, save_graph
 from kg_rag.models import CodeEntityType, KnowledgeGraph
+from kg_rag.projects import ProjectsConfig
 from kg_rag.retriever import GraphRetriever
 
 logger = logging.getLogger(__name__)
@@ -28,25 +29,39 @@ logger = logging.getLogger(__name__)
 _kg: KnowledgeGraph | None = None
 _retriever: GraphRetriever | None = None
 _embedder_loaded = False
+_active_project: str = settings.ACTIVE_PROJECT
+_projects_cfg: ProjectsConfig = ProjectsConfig.load()
 
 
-def _load_graph() -> KnowledgeGraph:
-    """Load (or build) the graph. Called once at startup."""
-    global _kg
-    if _kg is not None:
-        return _kg
+def _cache_path_for(project: str) -> Path:
+    """Return the pickle cache path for a project name."""
+    if _projects_cfg.projects:
+        return _projects_cfg.graph_cache_path(project)
+    return settings.GRAPH_CACHE_PATH
 
-    cache = settings.GRAPH_CACHE_PATH
+
+def _load_graph(project: str | None = None) -> KnowledgeGraph:
+    """Load (or build) the graph for a project. Called once at startup."""
+    global _kg, _active_project
+    project = project or _active_project
+
+    cache = _cache_path_for(project)
     if cache.exists():
-        print(f"[kg-mcp] Loading cached graph from {cache} ...", file=sys.stderr)
+        print(f"[kg-mcp] Loading '{project}' graph from {cache} ...", file=sys.stderr)
         _kg = load_graph(cache)
     else:
-        print(f"[kg-mcp] No cache found — indexing {settings.REPO_ROOT} ...", file=sys.stderr)
-        _kg = index_repo(settings.REPO_ROOT, show_progress=True)
+        # Try to build the project scope
+        repo_root = _projects_cfg.get_repo_root()
+        scope = _projects_cfg.projects.get(project)
+        scope_paths = _projects_cfg.resolve_paths(project) if scope else None
+        print(f"[kg-mcp] No cache – indexing project '{project}' ...", file=sys.stderr)
+        _kg = index_repo(repo_root, show_progress=True, scope_paths=scope_paths)
         save_graph(_kg, cache)
 
+    _active_project = project
     print(
-        f"[kg-mcp] Graph ready: {len(_kg.entities)} entities, {len(_kg.relations)} relations",
+        f"[kg-mcp] Graph ready ({project}): {len(_kg.entities)} entities, "
+        f"{len(_kg.relations)} relations",
         file=sys.stderr,
     )
     return _kg
@@ -306,6 +321,7 @@ def graph_stats() -> str:
         key = ent.entity_type.value
         type_counts[key] = type_counts.get(key, 0) + 1
     lines = [
+        f"Active project: {_active_project}",
         f"Total entities: {len(kg.entities)}",
         f"Total relations: {len(kg.relations)}",
         "",
@@ -330,21 +346,119 @@ def graph_stats() -> str:
 
 @mcp.tool()
 def reindex_repo(repo_path: str = "") -> str:
-    """Re-index the source code repository and rebuild the knowledge graph.
+    """Re-index the current active project and rebuild its knowledge graph.
 
     Args:
-        repo_path: Path to the repo root. Uses configured REPO_ROOT if empty.
+        repo_path: Path to the repo root. Uses configured repo root if empty.
     """
     global _kg, _retriever, _embedder_loaded
-    root = Path(repo_path).resolve() if repo_path else settings.REPO_ROOT
+    root = Path(repo_path).resolve() if repo_path else _projects_cfg.get_repo_root()
 
-    _kg = index_repo(root, show_progress=False)
-    save_graph(_kg, settings.GRAPH_CACHE_PATH)
+    scope = _projects_cfg.projects.get(_active_project)
+    scope_paths = _projects_cfg.resolve_paths(_active_project) if scope else None
+
+    _kg = index_repo(root, show_progress=False, scope_paths=scope_paths)
+    save_graph(_kg, _cache_path_for(_active_project))
 
     # Reset the retriever so it picks up the new graph
     _retriever = None
     _embedder_loaded = False
-    return f"Re-indexed {root}. {len(_kg.entities)} entities, {len(_kg.relations)} relations."
+    return (
+        f"Re-indexed project '{_active_project}'. "
+        f"{len(_kg.entities)} entities, {len(_kg.relations)} relations."
+    )
+
+
+# --- Tool: list projects --------------------------------------------------
+
+
+@mcp.tool()
+def list_projects() -> str:
+    """List all configured project scopes from projects.json.
+
+    Shows each project name, description, paths, and whether a cached index
+    exists.  The currently active project is marked with *.
+    """
+    cfg = ProjectsConfig.load()  # re-read in case file was edited
+    if not cfg.projects:
+        return "No projects configured. Edit projects.json to add scopes."
+    lines: list[str] = [f"Repo root: {cfg.get_repo_root()}\n"]
+    for name, scope in cfg.projects.items():
+        marker = " *" if name == _active_project else ""
+        cached = "cached" if cfg.graph_cache_path(name).exists() else "not cached"
+        lines.append(f"- {name}{marker}  ({cached})")
+        if scope.description:
+            lines.append(f"    {scope.description}")
+        lines.append(f"    paths: {', '.join(scope.paths)}")
+    return "\n".join(lines)
+
+
+# --- Tool: switch project -------------------------------------------------
+
+
+@mcp.tool()
+def switch_project(project_name: str) -> str:
+    """Switch the active project scope and load its knowledge graph.
+
+    If the project has not been indexed yet, it will be indexed on the fly.
+
+    Args:
+        project_name: Name of a project defined in projects.json.
+    """
+    global _kg, _retriever, _embedder_loaded, _active_project, _projects_cfg
+    _projects_cfg = ProjectsConfig.load()  # re-read
+
+    if project_name not in _projects_cfg.projects:
+        available = ", ".join(_projects_cfg.list_project_names())
+        return f"Unknown project '{project_name}'. Available: {available}"
+
+    _retriever = None
+    _embedder_loaded = False
+    _kg = None
+
+    _load_graph(project_name)
+    return (
+        f"Switched to project '{project_name}'. "
+        f"{len(_kg.entities)} entities, {len(_kg.relations)} relations."
+    )
+
+
+# --- Tool: index project --------------------------------------------------
+
+
+@mcp.tool()
+def index_project(project_name: str) -> str:
+    """Index (or re-index) a specific project scope and cache the result.
+
+    Args:
+        project_name: Name of a project defined in projects.json.
+    """
+    global _kg, _retriever, _embedder_loaded, _active_project, _projects_cfg
+    _projects_cfg = ProjectsConfig.load()
+
+    if project_name not in _projects_cfg.projects:
+        available = ", ".join(_projects_cfg.list_project_names())
+        return f"Unknown project '{project_name}'. Available: {available}"
+
+    root = _projects_cfg.get_repo_root()
+    scope_paths = _projects_cfg.resolve_paths(project_name)
+
+    print(f"[kg-mcp] Indexing project '{project_name}' ...", file=sys.stderr)
+    kg = index_repo(root, show_progress=False, scope_paths=scope_paths)
+    cache = _cache_path_for(project_name)
+    save_graph(kg, cache)
+
+    # If this is the active project, reload it
+    if project_name == _active_project:
+        _kg = kg
+        _retriever = None
+        _embedder_loaded = False
+
+    return (
+        f"Indexed project '{project_name}': "
+        f"{len(kg.entities)} entities, {len(kg.relations)} relations. "
+        f"Cached to {cache}."
+    )
 
 
 # ======================================================================

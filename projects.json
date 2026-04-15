@@ -1,0 +1,27 @@
+{
+  "repo_root": "W:\\git\\Bladed",
+  "projects": {
+    "_full_": {
+      "description": "Full mono-repo index",
+      "paths": ["."]
+    },
+    "Upgrader": {
+      "description": "BladedX Upgrader project",
+      "paths": ["BladedX/Upgrader"]
+    },
+    "Workflow": {
+      "description": "Workflow backend and CLI",
+      "paths": ["BladedX/Workflow"]
+    },
+    "Calculation": {
+      "description": "Calculation backend and CLI",
+      "paths": ["Source/Bladed/Calculation"]
+    }
+    ,
+    "BladedNG": {
+      "description": "BladedNG including CLI, test, and installer code",
+      "paths": ["BladedX"]
+    }
+  }
+}
+    
