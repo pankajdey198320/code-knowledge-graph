@@ -24,6 +24,18 @@ _EXTENSION_MAP: dict[str, str] = {
     ".f08": "fortran",
     ".for": "fortran",
     ".fpp": "fortran",
+    # Kotlin (TeamCity DSL etc.)
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    # PowerShell
+    ".ps1": "powershell",
+    ".psm1": "powershell",
+    ".psd1": "powershell",
+    # TypeScript / JavaScript
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "javascript",
 }
 
 
@@ -40,6 +52,21 @@ def _get_parser(lang: str) -> BaseCodeParser:
     elif lang == "fortran":
         from kg_rag.parsers.fortran_parser import FortranParser
         return FortranParser()
+    elif lang == "kotlin":
+        from kg_rag.parsers.kotlin_parser import KotlinParser
+        return KotlinParser()
+    elif lang == "powershell":
+        from kg_rag.parsers.powershell_parser import PowerShellParser
+        return PowerShellParser()
+    elif lang == "typescript":
+        from kg_rag.parsers.typescript_parser import TypeScriptParser
+        return TypeScriptParser("typescript")
+    elif lang == "tsx":
+        from kg_rag.parsers.typescript_parser import TypeScriptParser
+        return TypeScriptParser("tsx")
+    elif lang == "javascript":
+        from kg_rag.parsers.typescript_parser import TypeScriptParser
+        return TypeScriptParser("javascript")
     raise ValueError(f"No parser for language: {lang}")
 
 

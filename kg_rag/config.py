@@ -30,7 +30,7 @@ class Settings:
     # Repo indexing
     REPO_ROOT: Path = Path(os.getenv("REPO_ROOT", ".")).resolve()
     INDEX_EXTENSIONS: list[str] = os.getenv(
-        "INDEX_EXTENSIONS", ".py,.cpp,.h,.hpp,.cs,.f90,.f95,.f03,.f08,.for,.fpp,.f"
+        "INDEX_EXTENSIONS", ".py,.cpp,.h,.hpp,.cs,.f90,.f95,.f03,.f08,.for,.fpp,.f,.kt,.kts,.ps1,.psm1,.psd1,.ts,.tsx,.js,.jsx"
     ).split(",")
     SKIP_DIRS: set[str] = set(
         os.getenv(

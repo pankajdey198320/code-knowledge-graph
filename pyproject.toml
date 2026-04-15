@@ -21,6 +21,10 @@ dependencies = [
     "tree-sitter-c-sharp>=0.23",
     "tree-sitter-cpp>=0.23",
     "tree-sitter-fortran>=0.4",
+    "tree-sitter-kotlin>=1.0",
+    "tree-sitter-powershell>=0.26",
+    "tree-sitter-typescript>=0.23",
+    "tree-sitter-javascript>=0.25",
     # LLM (Ollama via OpenAI-compatible client)
     "openai>=1.0",
     # MCP server
