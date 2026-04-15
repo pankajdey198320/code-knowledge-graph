@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.env
+.venv/
+*.db
+*.pkl
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+Neo4_data/
+test_callgraph.py

@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["kg_rag*"]
+
+[project]
+name = "kg-code-rag"
+version = "0.1.0"
+description = "Source-code Knowledge Graph + MCP query tool for mono-repos"
+requires-python = ">=3.10"
+dependencies = [
+    # Graph & embeddings
+    "networkx>=3.0",
+    "numpy>=1.24",
+    "sentence-transformers>=2.2",
+    # Code parsing
+    "tree-sitter>=0.23",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-c-sharp>=0.23",
+    "tree-sitter-cpp>=0.23",
+    # LLM (Ollama via OpenAI-compatible client)
+    "openai>=1.0",
+    # MCP server
+    "mcp[cli]>=1.0",
+    # Core
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+    "tqdm>=4.65",
+]
+
+[project.optional-dependencies]
+neo4j = ["neo4j>=5.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.1",
+    "mypy>=1.5",
+]
+
+[project.scripts]
+kg-index = "kg_rag.cli:main_index"
+kg-mcp = "kg_rag.mcp_server:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true

@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "code-knowledge-graph": {
+      "type": "stdio",
+      "command": "w:/git/Learnig Lab/KG/.venv/Scripts/python.exe",
+      "args": ["-m", "kg_rag.mcp_server"],
+      "cwd": "w:/git/Learnig Lab/KG"
+    }
+  }
+}
