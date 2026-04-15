@@ -18,8 +18,9 @@ class Settings:
     LLM_MODEL: str = os.getenv("LLM_MODEL", "llama3")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.0"))
 
-    # Embedding
+    # Embedding (local path under models/ or HuggingFace model name)
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    MODELS_DIR: Path = Path(__file__).resolve().parent.parent / "models"
 
     # Neo4j
     NEO4J_URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")

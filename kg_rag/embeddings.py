@@ -14,7 +14,12 @@ class KGEmbedder:
     """Wraps a sentence-transformer to embed code KG elements."""
 
     def __init__(self, model_name: str | None = None) -> None:
-        self.model = SentenceTransformer(model_name or settings.EMBEDDING_MODEL)
+        model_name = model_name or settings.EMBEDDING_MODEL
+        # Prefer local copy under models/ for faster startup
+        local_path = settings.MODELS_DIR / model_name
+        if local_path.exists():
+            model_name = str(local_path)
+        self.model = SentenceTransformer(model_name)
         self._cache: dict[str, NDArray[np.float32]] = {}
 
     # ------------------------------------------------------------------

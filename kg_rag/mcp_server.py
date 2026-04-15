@@ -91,8 +91,9 @@ def _get_kg() -> KnowledgeGraph:
     return _kg
 
 
-# --- Eager startup load (graph only, not the embedding model) ----------
+# --- Eager startup load (graph + embedding model) ---------------------
 _load_graph()
+_ensure_retriever()
 
 
 # ======================================================================
