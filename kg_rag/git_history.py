@@ -215,7 +215,7 @@ def _extract_workitem_ids(message: str) -> list[str]:
 def build_git_history_graph(
     repo_root: Path,
     scope_paths: list[Path] | None = None,
-    since: str | None = "2 years ago",
+    since: str | None = "4 years ago",
     max_count: int | None = None,
     max_files_per_commit: int = 50,
     co_change_threshold: int = 3,

@@ -51,8 +51,8 @@ def main_index() -> None:
     )
     parser.add_argument(
         "--since",
-        default="2 years ago",
-        help="Git history time window (default: '2 years ago'). Only used with --git",
+        default="4 years ago",
+        help="Git history time window (default: '4 years ago'). Only used with --git",
     )
     parser.add_argument(
         "--ado",
