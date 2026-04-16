@@ -54,6 +54,12 @@ def main_index() -> None:
         default="2 years ago",
         help="Git history time window (default: '2 years ago'). Only used with --git",
     )
+    parser.add_argument(
+        "--ado",
+        action="store_true",
+        default=False,
+        help="Hydrate work items from Azure DevOps REST API (requires ADO_ORG, ADO_PAT in .env)",
+    )
     args = parser.parse_args()
 
     from kg_rag.indexer import index_repo, save_graph
@@ -119,6 +125,14 @@ def main_index() -> None:
         git_ent = len(git_kg.entities)
         git_rel = len(git_kg.relations)
         print(f"  Git layer: {git_ent} entities, {git_rel} relations merged")
+
+    # Optionally hydrate work items from Azure DevOps
+    if args.ado:
+        from kg_rag.workitems import hydrate_work_items
+
+        print("Hydrating work items from Azure DevOps ...")
+        count = hydrate_work_items(kg)
+        print(f"  Hydrated {count} work item(s)")
 
     out = save_graph(kg, output)
     print(f"\nDone. {len(kg.entities)} entities, {len(kg.relations)} relations")

@@ -40,6 +40,11 @@ class Settings:
     )
     ACTIVE_PROJECT: str = os.getenv("ACTIVE_PROJECT", "_full_")
 
+    # Azure DevOps (work item hydration)
+    ADO_ORG: str = os.getenv("ADO_ORG", "")
+    ADO_PROJECT: str = os.getenv("ADO_PROJECT", "")
+    ADO_PAT: str = os.getenv("ADO_PAT", "")
+
     # Paths
     PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
     DATA_DIR: Path = PROJECT_ROOT / "data"

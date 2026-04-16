@@ -121,7 +121,18 @@ def build_enriched_descriptions(kg: KnowledgeGraph) -> dict[str, str]:
                         if wid and wid not in wi_ids:
                             wi_ids.append(wid)
             if wi_ids:
-                parts.append(f"linked work items: {', '.join(f'#{w}' for w in wi_ids[:10])}")
+                # Try to include hydrated titles from work_item entities
+                wi_labels: list[str] = []
+                for wid in wi_ids[:10]:
+                    wi_key = f"::WI#{wid}@0"
+                    wi_ent = entity_map.get(wi_key)
+                    if wi_ent and wi_ent.metadata.get("title"):
+                        wi_type = wi_ent.metadata.get("work_item_type", "")
+                        prefix = f"[{wi_type}] " if wi_type else ""
+                        wi_labels.append(f"#{wid} {prefix}{wi_ent.metadata['title']}")
+                    else:
+                        wi_labels.append(f"#{wid}")
+                parts.append(f"linked work items: {'; '.join(wi_labels)}")
 
         descriptions[key] = "\n".join(parts)
 

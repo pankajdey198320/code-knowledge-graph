@@ -74,12 +74,12 @@ questions — not just "what / how".
 
 ### Phase 3 — Work Item Hydration (requires API access)
 
-- [ ] **3a.** ADO / Jira API client with local cache (JSON or SQLite)
+- [x] **3a.** ADO / Jira API client with local cache (JSON or SQLite)
   - Config: `ADO_ORG`, `ADO_PROJECT`, `ADO_PAT` in `.env`
   - Batch fetch, cache to `data/workitems_cache.json`
-- [ ] **3b.** Hydrate `work_item` entities with title, description, type, tags
-- [ ] **3c.** Embed work item descriptions → semantic search over intent
-- [ ] **3d.** Add MCP tool: `blame_context` (full "why" answers combining all layers)
+- [x] **3b.** Hydrate `work_item` entities with title, description, type, tags
+- [x] **3c.** Embed work item descriptions → semantic search over intent
+- [x] **3d.** Add MCP tool: `blame_context` (full "why" answers combining all layers)
 
 ---
 

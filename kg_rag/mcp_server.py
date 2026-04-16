@@ -584,9 +584,19 @@ def work_items_for_code(file_path: str) -> str:
     if not wi_map:
         return f"No work items linked to '{file_path}' via commit messages."
 
+    # Try to include hydrated details
+    kg_wi = {e.metadata.get("id", ""): e for e in kg.entities if e.entity_type.value == "work_item"}
+
     lines = [f"Work items linked to {file_path}:\n"]
     for wid, commits in sorted(wi_map.items()):
-        lines.append(f"  #{wid} — via {len(commits)} commit(s)")
+        wi_ent = kg_wi.get(wid)
+        if wi_ent and wi_ent.metadata.get("title"):
+            wi_type = wi_ent.metadata.get("work_item_type", "")
+            title = wi_ent.metadata["title"]
+            state = wi_ent.metadata.get("state", "")
+            lines.append(f"  #{wid} [{wi_type}] {title} ({state}) — {len(commits)} commit(s)")
+        else:
+            lines.append(f"  #{wid} — {len(commits)} commit(s)")
     return "\n".join(lines)
 
 
@@ -644,6 +654,53 @@ def code_for_work_item(work_item_id: str) -> str:
             msg = ce.metadata.get("message", "")
             sha = ce.metadata.get("sha", "")[:8]
             lines.append(f"  {sha}: {msg}")
+
+    return "\n".join(lines)
+
+
+# --- Tool: work item details -----------------------------------------------
+
+
+@mcp.tool()
+def work_item_details(work_item_id: str) -> str:
+    """Show full details of a work item (title, type, state, description, tags).
+
+    Requires the graph to have been indexed with --git --ado flags.
+
+    Args:
+        work_item_id: The numeric work item ID (e.g. "111863").
+    """
+    kg = _get_kg()
+    wid = work_item_id.lstrip("#")
+
+    wi_ent = next(
+        (e for e in kg.entities
+         if e.entity_type.value == "work_item" and e.metadata.get("id") == wid),
+        None,
+    )
+    if wi_ent is None:
+        return f"Work item #{wid} not found in the graph."
+
+    meta = wi_ent.metadata
+    title = meta.get("title", "(not hydrated)")
+    wi_type = meta.get("work_item_type", "?")
+    state = meta.get("state", "?")
+    tags = meta.get("tags", "")
+    area = meta.get("area_path", "")
+    desc = meta.get("description", "")
+
+    lines = [
+        f"Work Item #{wid}",
+        f"  Type: {wi_type}",
+        f"  Title: {title}",
+        f"  State: {state}",
+    ]
+    if tags:
+        lines.append(f"  Tags: {tags}")
+    if area:
+        lines.append(f"  Area Path: {area}")
+    if desc:
+        lines.append(f"  Description: {desc[:500]}")
 
     return "\n".join(lines)
 
