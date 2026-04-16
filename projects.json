@@ -21,6 +21,10 @@
     "BladedNG": {
       "description": "BladedNG including CLI, test, and installer code",
       "paths": ["BladedX"]
+    },
+    "cicd": {
+      "description": "CI/CD pipeline code",
+      "paths": [".teamcity"]
     }
   }
 }

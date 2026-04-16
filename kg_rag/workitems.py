@@ -26,7 +26,7 @@ class AdoClient:
 
         ADO_ORG=my-org            # Azure DevOps organisation name
         ADO_PROJECT=my-project    # Project name (optional — for scoping queries)
-        ADO_PAT=xxxxxxxx          # Personal Access Token with Work Items read scope
+        ADO_WI_READ=xxxxxxxx      # Personal Access Token with Work Items read scope
     """
 
     def __init__(
@@ -38,16 +38,18 @@ class AdoClient:
         import os
         self.org = org or os.getenv("ADO_ORG", "")
         self.project = project or os.getenv("ADO_PROJECT", "")
-        self.pat = pat or os.getenv("ADO_PAT", "")
+        self.pat = pat or os.getenv("ADO_WI_READ", "")
         if not self.org or not self.pat:
             raise ValueError(
-                "ADO_ORG and ADO_PAT must be set (in .env or environment) "
+                "ADO_ORG and ADO_WI_READ must be set (in .env or environment) "
                 "to use Azure DevOps work item hydration."
             )
         # Basic auth header: base64(":" + PAT)
         token = b64encode(f":{self.pat}".encode()).decode()
         self._auth_header = f"Basic {token}"
         self._base = f"https://dev.azure.com/{self.org}"
+        if self.project:
+            self._base += f"/{self.project}"
 
     # ------------------------------------------------------------------
     # Low-level HTTP

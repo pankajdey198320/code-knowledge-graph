@@ -19,7 +19,7 @@ from kg_rag.models import (
 # Configurable patterns for extracting work-item IDs from commit messages
 # ---------------------------------------------------------------------------
 _WORKITEM_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"(?:AB)?#(\d{4,})"),      # #12345 or AB#12345
+    re.compile(r"(?:AB)?#(\d{5,})"),      # #12345 or AB#12345 (5+ digits to avoid version refs)
     re.compile(r"([A-Z]+-\d+)"),           # JIRA-1234
 ]
 
@@ -38,11 +38,10 @@ def _run_git_log(
     since: str | None = None,
     max_count: int | None = None,
 ) -> str:
-    """Run ``git log`` and return raw stdout."""
+    """Run ``git log`` (all commits incl. merges) and return raw stdout."""
     cmd: list[str] = [
         "git", "-C", str(repo_root),
         "log",
-        "--no-merges",
         "--name-only",
         f"--pretty=format:{_COMMIT_PREFIX}{_SEP}%H{_SEP}%an{_SEP}%ae{_SEP}%aI{_SEP}%s",
     ]
@@ -53,7 +52,6 @@ def _run_git_log(
     cmd.append("--")
     if scope_paths:
         for p in scope_paths:
-            # Make path relative to repo root for git
             try:
                 rel = p.resolve().relative_to(repo_root.resolve())
                 cmd.append(str(rel))
@@ -69,6 +67,55 @@ def _run_git_log(
         timeout=300,
     )
     return result.stdout
+
+
+def _fetch_merge_bodies(
+    repo_root: Path,
+    scope_paths: list[Path] | None = None,
+    since: str | None = None,
+) -> dict[str, str]:
+    """Return ``{sha: full_message_body}`` for merge commits.
+
+    Uses control-character separators (RS=0x1e between sha/body,
+    US=0x1f between records) to reliably parse multi-line bodies.
+    """
+    cmd: list[str] = [
+        "git", "-C", str(repo_root),
+        "log", "--merges",
+        "--pretty=format:%H%x1e%B%x1f",
+    ]
+    if since:
+        cmd.append(f"--since={since}")
+    cmd.append("--")
+    if scope_paths:
+        for p in scope_paths:
+            try:
+                rel = p.resolve().relative_to(repo_root.resolve())
+                cmd.append(str(rel))
+            except ValueError:
+                cmd.append(str(p))
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+    )
+
+    body_map: dict[str, str] = {}
+    for record in result.stdout.split("\x1f"):
+        record = record.strip()
+        if not record:
+            continue
+        parts = record.split("\x1e", 1)
+        if len(parts) == 2:
+            sha = parts[0].strip()
+            body = parts[1].strip()
+            if sha and body:
+                body_map[sha] = body
+    return body_map
 
 
 class _CommitRecord:
@@ -160,8 +207,12 @@ def build_git_history_graph(
         co_change_threshold: Minimum co-occurrence count to create a CO_CHANGED edge.
         index_extensions: If set, only include files with these extensions.
     """
+    # Single pass: all commits (incl. merges) for file history & ownership
     raw = _run_git_log(repo_root, scope_paths, since, max_count)
     commits = _parse_git_log(raw)
+
+    # Fetch full message bodies for merge commits (WI IDs live there)
+    merge_bodies = _fetch_merge_bodies(repo_root, scope_paths, since)
 
     kg = KnowledgeGraph()
     seen_authors: set[str] = set()
@@ -183,17 +234,22 @@ def build_git_history_graph(
         if len(files) > max_files_per_commit:
             continue
 
+        is_merge = commit.sha in merge_bodies
+
         # --- Commit entity ---
+        commit_meta = {
+            "sha": commit.sha,
+            "author": commit.author_name,
+            "email": commit.author_email,
+            "date": commit.date,
+            "message": commit.message,
+        }
+        if is_merge:
+            commit_meta["is_merge"] = "true"
         commit_entity = Entity(
             name=commit.sha[:8],
             entity_type=CodeEntityType.COMMIT,
-            metadata={
-                "sha": commit.sha,
-                "author": commit.author_name,
-                "email": commit.author_email,
-                "date": commit.date,
-                "message": commit.message,
-            },
+            metadata=commit_meta,
         )
         kg.add_entity(commit_entity)
 
@@ -223,8 +279,11 @@ def build_git_history_graph(
             for fb in sorted_files[i + 1:]:
                 co_change_counts[(fa, fb)] += 1
 
-        # --- Work-item IDs ---
-        wids = _extract_workitem_ids(commit.message)
+        # --- Work-item IDs (subject + merge body) ---
+        full_text = commit.message
+        if is_merge:
+            full_text += "\n" + merge_bodies[commit.sha]
+        wids = _extract_workitem_ids(full_text)
         for wid in wids:
             if wid not in seen_workitems:
                 seen_workitems.add(wid)

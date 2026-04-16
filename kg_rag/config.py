@@ -43,7 +43,7 @@ class Settings:
     # Azure DevOps (work item hydration)
     ADO_ORG: str = os.getenv("ADO_ORG", "")
     ADO_PROJECT: str = os.getenv("ADO_PROJECT", "")
-    ADO_PAT: str = os.getenv("ADO_PAT", "")
+    ADO_PAT: str = os.getenv("ADO_WI_READ", "")
 
     # Paths
     PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
