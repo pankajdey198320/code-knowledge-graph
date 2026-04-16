@@ -43,6 +43,17 @@ def main_index() -> None:
         action="store_true",
         help="List configured projects and exit",
     )
+    parser.add_argument(
+        "--git",
+        action="store_true",
+        default=False,
+        help="Include git commit history (ownership, co-change, work-item links)",
+    )
+    parser.add_argument(
+        "--since",
+        default="2 years ago",
+        help="Git history time window (default: '2 years ago'). Only used with --git",
+    )
     args = parser.parse_args()
 
     from kg_rag.indexer import index_repo, save_graph
@@ -92,6 +103,23 @@ def main_index() -> None:
         print(f"  Scope paths: {[str(p) for p in scope_paths]}")
 
     kg = index_repo(repo, extensions=extensions, show_progress=True, scope_paths=scope_paths)
+
+    # Optionally merge git history layer
+    if args.git:
+        from kg_rag.git_history import build_git_history_graph, merge_git_layer
+
+        print(f"Extracting git history (since {args.since}) ...")
+        git_kg = build_git_history_graph(
+            repo_root=repo,
+            scope_paths=scope_paths,
+            since=args.since,
+            index_extensions=extensions,
+        )
+        merge_git_layer(kg, git_kg)
+        git_ent = len(git_kg.entities)
+        git_rel = len(git_kg.relations)
+        print(f"  Git layer: {git_ent} entities, {git_rel} relations merged")
+
     out = save_graph(kg, output)
     print(f"\nDone. {len(kg.entities)} entities, {len(kg.relations)} relations")
     print(f"Saved to {out}")

@@ -462,6 +462,215 @@ def index_project(project_name: str) -> str:
     )
 
 
+# --- Tool: code ownership -------------------------------------------------
+
+
+@mcp.tool()
+def code_ownership(file_path: str) -> str:
+    """Show who most frequently modifies a file, ranked by commit count.
+
+    Args:
+        file_path: Relative path of the file inside the repo.
+    """
+    kg = _get_kg()
+    mods = [
+        r for r in kg.relations
+        if r.source == file_path
+        and r.relation_type.value == "MODIFIED_BY"
+    ]
+    if not mods:
+        return f"No ownership data for '{file_path}'. Run indexing with --git to include git history."
+    # Sort by commit count descending
+    mods.sort(
+        key=lambda r: int(r.metadata.get("commit_count", "0")),
+        reverse=True,
+    )
+    lines = [f"Ownership for {file_path}:\n"]
+    for r in mods:
+        email = r.metadata.get("email", "?")
+        count = r.metadata.get("commit_count", "?")
+        lines.append(f"  {email}: {count} commits")
+    return "\n".join(lines)
+
+
+# --- Tool: change coupling ------------------------------------------------
+
+
+@mcp.tool()
+def change_coupling(file_path: str, min_count: int = 3) -> str:
+    """Show files that frequently change together with a given file.
+
+    Args:
+        file_path: Relative path of the file inside the repo.
+        min_count: Minimum co-change count to include (default 3).
+    """
+    kg = _get_kg()
+    # CO_CHANGED edges go both directions
+    coupled: list[tuple[str, int]] = []
+    for r in kg.relations:
+        if r.relation_type.value != "CO_CHANGED":
+            continue
+        cnt = int(r.metadata.get("co_change_count", "0"))
+        if cnt < min_count:
+            continue
+        if r.source == file_path:
+            coupled.append((r.target, cnt))
+        elif r.target == file_path:
+            coupled.append((r.source, cnt))
+    if not coupled:
+        return f"No co-change data for '{file_path}'. Run indexing with --git to include git history."
+    coupled.sort(key=lambda x: x[1], reverse=True)
+    lines = [f"Files that frequently change with {file_path}:\n"]
+    for partner, cnt in coupled[:20]:
+        lines.append(f"  {partner}: {cnt} co-changes")
+    return "\n".join(lines)
+
+
+# --- Tool: hot spots -------------------------------------------------------
+
+
+@mcp.tool()
+def hot_spots(top_n: int = 20) -> str:
+    """Show files with the highest commit churn (most COMMITTED_IN relations).
+
+    High-churn files are potential complexity or risk hotspots.
+
+    Args:
+        top_n: Number of results to return (default 20).
+    """
+    kg = _get_kg()
+    from collections import Counter
+    file_counts: Counter[str] = Counter()
+    for r in kg.relations:
+        if r.relation_type.value == "COMMITTED_IN":
+            file_counts[r.source] += 1
+    if not file_counts:
+        return "No commit history data. Run indexing with --git to include git history."
+    lines = [f"Top {top_n} hot spots (files by commit count):\n"]
+    for fpath, cnt in file_counts.most_common(top_n):
+        lines.append(f"  {fpath}: {cnt} commits")
+    return "\n".join(lines)
+
+
+# --- Tool: work items for code --------------------------------------------
+
+
+@mcp.tool()
+def work_items_for_code(file_path: str) -> str:
+    """Find work items (user stories / bugs) linked to a file via git history.
+
+    Follows the chain: file → COMMITTED_IN → commit → LINKED_TO → work_item.
+
+    Args:
+        file_path: Relative path of the file inside the repo.
+    """
+    kg = _get_kg()
+    # Find commits that touched this file
+    commit_keys = [
+        r.target
+        for r in kg.relations
+        if r.source == file_path and r.relation_type.value == "COMMITTED_IN"
+    ]
+    if not commit_keys:
+        return f"No commit data for '{file_path}'."
+
+    # Find work items linked from those commits
+    wi_map: dict[str, list[str]] = {}  # wid → list of commit shas
+    for r in kg.relations:
+        if r.relation_type.value == "LINKED_TO" and r.source in commit_keys:
+            wid = r.metadata.get("work_item_id", "?")
+            wi_map.setdefault(wid, []).append(r.source)
+
+    if not wi_map:
+        return f"No work items linked to '{file_path}' via commit messages."
+
+    lines = [f"Work items linked to {file_path}:\n"]
+    for wid, commits in sorted(wi_map.items()):
+        lines.append(f"  #{wid} — via {len(commits)} commit(s)")
+    return "\n".join(lines)
+
+
+# --- Tool: code for work item ---------------------------------------------
+
+
+@mcp.tool()
+def code_for_work_item(work_item_id: str) -> str:
+    """Find all files changed for a given work item ID.
+
+    Follows: work_item ← LINKED_TO ← commit → COMMITTED_IN → file.
+
+    Args:
+        work_item_id: The numeric work item ID (e.g. "111863").
+    """
+    kg = _get_kg()
+    wid = work_item_id.lstrip("#")
+
+    # Find commits linked to this work item
+    commit_keys = [
+        r.source
+        for r in kg.relations
+        if r.relation_type.value == "LINKED_TO"
+        and r.metadata.get("work_item_id") == wid
+    ]
+    if not commit_keys:
+        return f"No commits found linked to work item #{wid}."
+
+    # Get commit messages for context
+    commit_entities = {
+        e.qualified_key: e
+        for e in kg.entities
+        if e.entity_type.value == "commit"
+    }
+
+    # Find files from those commits
+    from collections import Counter
+    file_counts: Counter[str] = Counter()
+    for r in kg.relations:
+        if r.relation_type.value == "COMMITTED_IN" and r.target in commit_keys:
+            file_counts[r.source] += 1
+
+    if not file_counts:
+        return f"No files found for work item #{wid}."
+
+    lines = [f"Files changed for work item #{wid} ({len(commit_keys)} commits):\n"]
+    for fpath, cnt in file_counts.most_common():
+        lines.append(f"  {fpath} ({cnt} commits)")
+
+    # Show commit messages for context
+    lines.append(f"\nCommit messages:")
+    for ck in commit_keys[:10]:
+        ce = commit_entities.get(ck)
+        if ce:
+            msg = ce.metadata.get("message", "")
+            sha = ce.metadata.get("sha", "")[:8]
+            lines.append(f"  {sha}: {msg}")
+
+    return "\n".join(lines)
+
+
+# --- Tool: blame context --------------------------------------------------
+
+
+@mcp.tool()
+def blame_context(file_path: str) -> str:
+    """Provide a rich "why/who/when" summary for a file.
+
+    Combines ownership, co-change, and work-item data into one view.
+
+    Args:
+        file_path: Relative path of the file inside the repo.
+    """
+    parts = [f"=== Blame context for {file_path} ===\n"]
+
+    parts.append(code_ownership(file_path))
+    parts.append("")
+    parts.append(change_coupling(file_path))
+    parts.append("")
+    parts.append(work_items_for_code(file_path))
+
+    return "\n".join(parts)
+
+
 # ======================================================================
 # Entry-point
 # ======================================================================

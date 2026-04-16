@@ -27,6 +27,10 @@ class CodeEntityType(str, Enum):
     PARAMETER = "parameter"
     IMPORT = "import"
     PACKAGE = "package"         # top-level project / assembly
+    # Git-history entities
+    COMMIT = "commit"
+    AUTHOR = "author"
+    WORK_ITEM = "work_item"
 
 
 class CodeRelationType(str, Enum):
@@ -40,6 +44,11 @@ class CodeRelationType(str, Enum):
     OVERRIDES = "OVERRIDES"        # method → base method
     DEPENDS_ON = "DEPENDS_ON"      # file → file
     BELONGS_TO = "BELONGS_TO"      # symbol → namespace / module
+    # Git-history relations
+    MODIFIED_BY = "MODIFIED_BY"    # file → author (weighted by commit count)
+    COMMITTED_IN = "COMMITTED_IN"  # file → commit
+    CO_CHANGED = "CO_CHANGED"      # file ↔ file (same-commit co-occurrence)
+    LINKED_TO = "LINKED_TO"        # commit → work_item
 
 
 # ======================================================================
