@@ -42,14 +42,14 @@ Example:
   "servers": {
     "kg-upgrader": {
       "type": "stdio",
-      "command": "C:/shared/kg/.venv/Scripts/python.exe",
+      "command": "C:/tools/kg/.venv/Scripts/python.exe",
       "args": ["-m", "kg_rag.mcp_server"],
-      "cwd": "C:/shared/kg",
+      "cwd": "C:/tools/kg",
       "env": {
-        "KG_REPO_ROOT": "W:/git/Bladed",
+        "KG_REPO_ROOT": "C:/repos/monorepo",
         "KG_PROJECT_NAME": "Upgrader",
-        "KG_SCOPE_PATHS": "BladedX/Upgrader",
-        "KG_CACHE_DIR": "C:/shared/kg/data"
+        "KG_SCOPE_PATHS": "src/Upgrader",
+        "KG_CACHE_DIR": "C:/tools/kg/data"
       }
     }
   }
@@ -70,16 +70,16 @@ Example env payload:
 
 ```json
 {
-  "repo_root": "W:/git/Bladed",
-  "cache_dir": "C:/shared/kg/data",
+  "repo_root": "C:/repos/monorepo",
+  "cache_dir": "C:/tools/kg/data",
   "projects": {
     "Upgrader": {
-      "description": "BladedX Upgrader project",
-      "paths": ["BladedX/Upgrader"]
+      "description": "Upgrader project",
+      "paths": ["src/Upgrader"]
     },
-    "BladedNG": {
-      "description": "BladedNG including CLI, test, and installer code",
-      "paths": ["BladedX"]
+    "Frontend": {
+      "description": "Frontend application",
+      "paths": ["src/Frontend"]
     }
   }
 }
@@ -95,7 +95,7 @@ Benefits:
 
 ## Cache strategy
 
-Use a shared cache directory such as `C:/shared/kg/data`.
+Use a shared cache directory such as `C:/tools/kg/data`.
 
 - Cache filenames should include the logical project name.
 - Cache filenames should also include a hash of the repo root.

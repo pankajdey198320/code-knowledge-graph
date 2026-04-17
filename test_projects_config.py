@@ -7,17 +7,17 @@ from kg_rag.projects import ProjectsConfig
 
 
 def test_load_uses_single_project_environment(monkeypatch) -> None:
-    monkeypatch.setenv("KG_REPO_ROOT", "W:/git/Bladed")
+    monkeypatch.setenv("KG_REPO_ROOT", "C:/repos/example")
     monkeypatch.setenv("KG_PROJECT_NAME", "Upgrader")
-    monkeypatch.setenv("KG_SCOPE_PATHS", "BladedX/Upgrader")
+    monkeypatch.setenv("KG_SCOPE_PATHS", "src/Upgrader")
     monkeypatch.delenv("KG_PROJECTS_JSON", raising=False)
     monkeypatch.delenv("KG_PROJECTS_FILE", raising=False)
 
     cfg = ProjectsConfig.load(Path("does-not-matter.json"))
 
-    assert cfg.get_repo_root() == Path("W:/git/Bladed").resolve()
+    assert cfg.get_repo_root() == Path("C:/repos/example").resolve()
     assert cfg.list_project_names() == ["Upgrader"]
-    assert cfg.projects["Upgrader"].paths == ["BladedX/Upgrader"]
+    assert cfg.projects["Upgrader"].paths == ["src/Upgrader"]
 
 
 def test_load_uses_inline_json_before_file(monkeypatch, tmp_path: Path) -> None:
@@ -25,7 +25,7 @@ def test_load_uses_inline_json_before_file(monkeypatch, tmp_path: Path) -> None:
     external_path.write_text(
         json.dumps(
             {
-                "repo_root": "W:/git/External",
+                "repo_root": "C:/repos/external",
                 "projects": {"External": {"paths": ["src"]}},
             }
         ),
@@ -36,7 +36,7 @@ def test_load_uses_inline_json_before_file(monkeypatch, tmp_path: Path) -> None:
         "KG_PROJECTS_JSON",
         json.dumps(
             {
-                "repo_root": "W:/git/Inline",
+                "repo_root": "C:/repos/inline",
                 "projects": {"Inline": {"paths": ["app"]}},
             }
         ),
@@ -44,7 +44,7 @@ def test_load_uses_inline_json_before_file(monkeypatch, tmp_path: Path) -> None:
 
     cfg = ProjectsConfig.load()
 
-    assert cfg.get_repo_root() == Path("W:/git/Inline").resolve()
+    assert cfg.get_repo_root() == Path("C:/repos/inline").resolve()
     assert cfg.list_project_names() == ["Inline"]
 
 
@@ -55,25 +55,25 @@ def test_cache_path_is_scoped_by_repo_and_project(monkeypatch, tmp_path: Path) -
     monkeypatch.delenv("KG_SCOPE_PATHS", raising=False)
 
     cfg = ProjectsConfig(
-        repo_root="W:/git/Bladed",
+        repo_root="C:/repos/example",
         cache_dir=str(tmp_path),
-        projects={"Bladed NG": {"paths": ["BladedX"]}},
+        projects={"Frontend App": {"paths": ["src/Frontend"]}},
     )
 
-    cache_path = cfg.graph_cache_path("Bladed NG")
+    cache_path = cfg.graph_cache_path("Frontend App")
 
     assert cache_path.parent == tmp_path.resolve()
-    assert cache_path.name.startswith("Bladed-NG-")
+    assert cache_path.name.startswith("Frontend-App-")
     assert cache_path.suffix == ".pkl"
 
 
 def test_default_project_name_prefers_explicit_match() -> None:
     cfg = ProjectsConfig(
-        repo_root="W:/git/Bladed",
+        repo_root="C:/repos/example",
         projects={
-            "Upgrader": {"paths": ["BladedX/Upgrader"]},
-            "BladedNG": {"paths": ["BladedX"]},
+            "Upgrader": {"paths": ["src/Upgrader"]},
+            "Frontend": {"paths": ["src/Frontend"]},
         },
     )
 
-    assert cfg.default_project_name("BladedNG") == "BladedNG"
+    assert cfg.default_project_name("Frontend") == "Frontend"

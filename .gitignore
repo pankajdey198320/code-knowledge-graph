@@ -5,8 +5,14 @@ dist/
 build/
 .env
 .venv/
+.vscode/
 *.db
 *.pkl
+projects.json
+data/workitems_cache.json
+_debug_*.py
+_explore_*.py
+_test_*.py
 models/
 .mypy_cache/
 .ruff_cache/
