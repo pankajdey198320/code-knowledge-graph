@@ -22,15 +22,18 @@ from kg_rag.retriever import GraphRetriever
 logger = logging.getLogger(__name__)
 
 # ======================================================================
-# Singleton graph state — eagerly loaded at import time so MCP tool
-# calls don't block for 15+ seconds on first invocation.
+# Singleton graph state for the active MCP project.
 # ======================================================================
 
 _kg: KnowledgeGraph | None = None
 _retriever: GraphRetriever | None = None
 _embedder_loaded = False
-_active_project: str = settings.ACTIVE_PROJECT
 _projects_cfg: ProjectsConfig = ProjectsConfig.load()
+_active_project: str = _projects_cfg.default_project_name(settings.ACTIVE_PROJECT)
+_DEFAULT_LIST_LIMIT = 100
+_DEFAULT_MATCH_LIMIT = 25
+_DEFAULT_RELATION_LIMIT = 50
+_DEFAULT_TEXT_LIMIT = 12000
 
 
 def _cache_path_for(project: str) -> Path:
@@ -43,7 +46,10 @@ def _cache_path_for(project: str) -> Path:
 def _load_graph(project: str | None = None) -> KnowledgeGraph:
     """Load (or build) the graph for a project. Called once at startup."""
     global _kg, _active_project
-    project = project or _active_project
+    project = _projects_cfg.default_project_name(project or _active_project)
+
+    if _kg is not None and project == _active_project:
+        return _kg
 
     cache = _cache_path_for(project)
     if cache.exists():
@@ -65,6 +71,20 @@ def _load_graph(project: str | None = None) -> KnowledgeGraph:
         file=sys.stderr,
     )
     return _kg
+
+
+def _truncate_text(text: str, limit: int = _DEFAULT_TEXT_LIMIT) -> str:
+    """Trim large MCP responses so stdio clients don't choke on giant payloads."""
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return f"{text[:limit]}\n\n... truncated {omitted} characters ..."
+
+
+def _summarize_matches(total: int, shown: int, noun: str) -> str:
+    if total <= shown:
+        return f"Found {total} {noun}."
+    return f"Found {total} {noun}; showing first {shown}."
 
 
 def _ensure_retriever() -> GraphRetriever:
@@ -91,11 +111,6 @@ def _get_kg() -> KnowledgeGraph:
     return _kg
 
 
-# --- Eager startup load (graph + embedding model) ---------------------
-_load_graph()
-_ensure_retriever()
-
-
 # ======================================================================
 # MCP server
 # ======================================================================
@@ -115,7 +130,7 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def search_code(query: str, top_k: int = 10) -> str:
+def search_code(query: str, top_k: int = 10, max_chars: int = _DEFAULT_TEXT_LIMIT) -> str:
     """Semantic search over the code knowledge graph.
 
     Finds entities (classes, functions, methods, …) whose names, signatures or
@@ -126,15 +141,26 @@ def search_code(query: str, top_k: int = 10) -> str:
         top_k: Number of results to return (default 10).
     """
     retriever = _ensure_retriever()
+    if top_k != retriever.top_k:
+        retriever = GraphRetriever(
+            kg=_get_kg(),
+            embedder=retriever.embedder,
+            top_k=top_k,
+            hops=retriever.hops,
+        )
     ctx = retriever.retrieve(query)
-    return ctx.subgraph_text
+    return _truncate_text(ctx.subgraph_text, max_chars)
 
 
 # --- Tool: lookup by name ------------------------------------------------
 
 
 @mcp.tool()
-def lookup_symbol(name: str) -> str:
+def lookup_symbol(
+    name: str,
+    max_matches: int = _DEFAULT_MATCH_LIMIT,
+    max_relations_per_match: int = _DEFAULT_RELATION_LIMIT,
+) -> str:
     """Find code entities whose name contains *name* and return their neighbourhood.
 
     Args:
@@ -144,25 +170,32 @@ def lookup_symbol(name: str) -> str:
     matches = kg.find_entities(name=name)
     if not matches:
         return f"No entities found matching '{name}'."
-    lines: list[str] = []
-    for ent in matches:
+    shown_matches = matches[:max_matches]
+    lines: list[str] = [_summarize_matches(len(matches), len(shown_matches), "matching entities"), ""]
+    for ent in shown_matches:
         loc = f" ({ent.file_path}:{ent.line_start})" if ent.file_path else ""
         sig = f" — {ent.signature}" if ent.signature else ""
         lines.append(f"- [{ent.entity_type.value}] {ent.name}{loc}{sig}")
         # Show immediate relations
+        relation_count = 0
         for rel in kg.relations:
             if rel.source == ent.qualified_key:
                 lines.append(f"    --[{rel.relation_type.value}]--> {rel.target}")
+                relation_count += 1
             elif rel.target == ent.qualified_key:
                 lines.append(f"    <--[{rel.relation_type.value}]-- {rel.source}")
-    return "\n".join(lines)
+                relation_count += 1
+            if relation_count >= max_relations_per_match:
+                lines.append(f"    ... relation output capped at {max_relations_per_match} ...")
+                break
+    return _truncate_text("\n".join(lines))
 
 
 # --- Tool: file overview --------------------------------------------------
 
 
 @mcp.tool()
-def file_overview(file_path: str) -> str:
+def file_overview(file_path: str, max_entities: int = _DEFAULT_LIST_LIMIT) -> str:
     """List all code entities defined in a specific file.
 
     Args:
@@ -172,18 +205,19 @@ def file_overview(file_path: str) -> str:
     matches = kg.find_entities(file_path=file_path)
     if not matches:
         return f"No entities found in '{file_path}'."
-    lines = [f"File: {file_path} — {len(matches)} entities\n"]
-    for ent in matches:
+    shown_matches = matches[:max_entities]
+    lines = [f"File: {file_path} — {len(matches)} entities", _summarize_matches(len(matches), len(shown_matches), "entities"), ""]
+    for ent in shown_matches:
         sig = f" — {ent.signature}" if ent.signature else ""
         lines.append(f"- [{ent.entity_type.value}] {ent.name} (L{ent.line_start}){sig}")
-    return "\n".join(lines)
+    return _truncate_text("\n".join(lines))
 
 
 # --- Tool: list classes ---------------------------------------------------
 
 
 @mcp.tool()
-def list_classes(name_filter: str = "") -> str:
+def list_classes(name_filter: str = "", limit: int = _DEFAULT_LIST_LIMIT) -> str:
     """List all classes in the codebase, optionally filtered by name.
 
     Args:
@@ -195,20 +229,21 @@ def list_classes(name_filter: str = "") -> str:
     )
     if not classes:
         return "No classes found."
-    lines = [f"Found {len(classes)} class(es):\n"]
-    for c in classes:
+    shown_classes = classes[:limit]
+    lines = [_summarize_matches(len(classes), len(shown_classes), "class(es)"), ""]
+    for c in shown_classes:
         loc = f"  ({c.file_path}:{c.line_start})" if c.file_path else ""
         lines.append(f"- {c.name}{loc}")
         if c.signature:
             lines.append(f"  {c.signature}")
-    return "\n".join(lines)
+    return _truncate_text("\n".join(lines))
 
 
 # --- Tool: list functions -------------------------------------------------
 
 
 @mcp.tool()
-def list_functions(name_filter: str = "") -> str:
+def list_functions(name_filter: str = "", limit: int = _DEFAULT_LIST_LIMIT) -> str:
     """List all top-level functions in the codebase, optionally filtered by name.
 
     Args:
@@ -220,20 +255,25 @@ def list_functions(name_filter: str = "") -> str:
     )
     if not funcs:
         return "No functions found."
-    lines = [f"Found {len(funcs)} function(s):\n"]
-    for f in funcs:
+    shown_funcs = funcs[:limit]
+    lines = [_summarize_matches(len(funcs), len(shown_funcs), "function(s)"), ""]
+    for f in shown_funcs:
         loc = f"  ({f.file_path}:{f.line_start})" if f.file_path else ""
         lines.append(f"- {f.name}{loc}")
         if f.signature:
             lines.append(f"  {f.signature}")
-    return "\n".join(lines)
+    return _truncate_text("\n".join(lines))
 
 
 # --- Tool: call graph -----------------------------------------------------
 
 
 @mcp.tool()
-def call_graph(function_name: str) -> str:
+def call_graph(
+    function_name: str,
+    max_matches: int = _DEFAULT_MATCH_LIMIT,
+    max_relations_per_match: int = _DEFAULT_RELATION_LIMIT,
+) -> str:
     """Show what a function/method calls and what calls it.
 
     Args:
@@ -245,8 +285,9 @@ def call_graph(function_name: str) -> str:
     if not funcs:
         return f"No entity found matching '{function_name}'."
 
-    lines: list[str] = []
-    for func in funcs:
+    shown_funcs = funcs[:max_matches]
+    lines: list[str] = [_summarize_matches(len(funcs), len(shown_funcs), "matching entities"), ""]
+    for func in shown_funcs:
         lines.append(f"### {func.name} ({func.entity_type.value}) — {func.file_path}:{func.line_start}")
         calls_out = [
             r for r in kg.relations
@@ -258,23 +299,31 @@ def call_graph(function_name: str) -> str:
         ]
         if calls_out:
             lines.append("  Calls:")
-            for r in calls_out:
+            for r in calls_out[:max_relations_per_match]:
                 lines.append(f"    → {r.target}")
+            if len(calls_out) > max_relations_per_match:
+                lines.append(f"    ... {len(calls_out) - max_relations_per_match} more ...")
         if called_by:
             lines.append("  Called by:")
-            for r in called_by:
+            for r in called_by[:max_relations_per_match]:
                 lines.append(f"    ← {r.source}")
+            if len(called_by) > max_relations_per_match:
+                lines.append(f"    ... {len(called_by) - max_relations_per_match} more ...")
         if not calls_out and not called_by:
             lines.append("  (no call relationships found)")
         lines.append("")
-    return "\n".join(lines)
+    return _truncate_text("\n".join(lines))
 
 
 # --- Tool: inheritance tree -----------------------------------------------
 
 
 @mcp.tool()
-def inheritance_tree(class_name: str) -> str:
+def inheritance_tree(
+    class_name: str,
+    max_matches: int = _DEFAULT_MATCH_LIMIT,
+    max_relations_per_match: int = _DEFAULT_RELATION_LIMIT,
+) -> str:
     """Show the inheritance hierarchy for a class.
 
     Args:
@@ -285,8 +334,9 @@ def inheritance_tree(class_name: str) -> str:
     if not classes:
         return f"No class found matching '{class_name}'."
 
-    lines: list[str] = []
-    for cls in classes:
+    shown_classes = classes[:max_matches]
+    lines: list[str] = [_summarize_matches(len(classes), len(shown_classes), "matching classes"), ""]
+    for cls in shown_classes:
         lines.append(f"### {cls.name} — {cls.file_path}:{cls.line_start}")
         inherits = [
             r for r in kg.relations
@@ -298,16 +348,20 @@ def inheritance_tree(class_name: str) -> str:
         ]
         if inherits:
             lines.append("  Inherits from:")
-            for r in inherits:
+            for r in inherits[:max_relations_per_match]:
                 lines.append(f"    ↑ {r.target}")
+            if len(inherits) > max_relations_per_match:
+                lines.append(f"    ... {len(inherits) - max_relations_per_match} more ...")
         if inherited_by:
             lines.append("  Inherited by:")
-            for r in inherited_by:
+            for r in inherited_by[:max_relations_per_match]:
                 lines.append(f"    ↓ {r.source}")
+            if len(inherited_by) > max_relations_per_match:
+                lines.append(f"    ... {len(inherited_by) - max_relations_per_match} more ...")
         if not inherits and not inherited_by:
             lines.append("  (no inheritance relationships found)")
         lines.append("")
-    return "\n".join(lines)
+    return _truncate_text("\n".join(lines))
 
 
 # --- Tool: graph stats ----------------------------------------------------
@@ -375,14 +429,14 @@ def reindex_repo(repo_path: str = "") -> str:
 
 @mcp.tool()
 def list_projects() -> str:
-    """List all configured project scopes from projects.json.
+    """List all configured project scopes from MCP config or projects.json fallback.
 
     Shows each project name, description, paths, and whether a cached index
     exists.  The currently active project is marked with *.
     """
     cfg = ProjectsConfig.load()  # re-read in case file was edited
     if not cfg.projects:
-        return "No projects configured. Edit projects.json to add scopes."
+        return "No projects configured. Supply MCP env config or add projects.json."
     lines: list[str] = [f"Repo root: {cfg.get_repo_root()}\n"]
     for name, scope in cfg.projects.items():
         marker = " *" if name == _active_project else ""
@@ -404,7 +458,7 @@ def switch_project(project_name: str) -> str:
     If the project has not been indexed yet, it will be indexed on the fly.
 
     Args:
-        project_name: Name of a project defined in projects.json.
+        project_name: Name of a project from MCP config or projects.json.
     """
     global _kg, _retriever, _embedder_loaded, _active_project, _projects_cfg
     _projects_cfg = ProjectsConfig.load()  # re-read
@@ -432,7 +486,7 @@ def index_project(project_name: str) -> str:
     """Index (or re-index) a specific project scope and cache the result.
 
     Args:
-        project_name: Name of a project defined in projects.json.
+        project_name: Name of a project from MCP config or projects.json.
     """
     global _kg, _retriever, _embedder_loaded, _active_project, _projects_cfg
     _projects_cfg = ProjectsConfig.load()

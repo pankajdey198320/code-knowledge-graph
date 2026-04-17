@@ -16,12 +16,12 @@ def main_index() -> None:
         "repo_root",
         nargs="?",
         default=None,
-        help="Path to the mono-repo root (default: from projects.json or REPO_ROOT)",
+        help="Path to the mono-repo root (default: from MCP env, projects.json, or REPO_ROOT)",
     )
     parser.add_argument(
         "-p", "--project",
         default=None,
-        help="Name of a project scope defined in projects.json (indexes only those paths)",
+        help="Name of a configured project scope (indexes only those paths)",
     )
     parser.add_argument(
         "--paths",
@@ -70,7 +70,7 @@ def main_index() -> None:
     # --list-projects
     if args.list_projects:
         if not cfg.projects:
-            print("No projects configured. Edit projects.json to add scopes.")
+            print("No projects configured. Supply MCP env config or add projects.json.")
         else:
             print(f"Repo root: {cfg.get_repo_root()}\n")
             for name, scope in cfg.projects.items():
@@ -87,6 +87,8 @@ def main_index() -> None:
     # Determine scope paths and output
     scope_paths: list[Path] | None = None
     project_name = args.project
+    if project_name is None and not args.repo_root and not args.paths and cfg.projects:
+        project_name = cfg.default_project_name()
 
     if project_name:
         if project_name not in cfg.projects:

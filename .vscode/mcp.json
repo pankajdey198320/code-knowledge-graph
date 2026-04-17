@@ -6,7 +6,11 @@
       "args": ["-m", "kg_rag.mcp_server"],
       "cwd": "w:/git/Learnig Lab/KG",
       "env": {
-        "ACTIVE_PROJECT": "BladedNG"
+        "KG_REPO_ROOT": "w:/git/Bladed",
+        "KG_PROJECT_NAME": "BladedNG",
+        "KG_PROJECT_DESCRIPTION": "BladedNG including CLI, test, and installer code",
+        "KG_SCOPE_PATHS": "BladedX",
+        "KG_CACHE_DIR": "w:/git/Learnig Lab/KG/data"
       }
     },
     "kg-Upgrader": {
@@ -15,7 +19,11 @@
       "args": ["-m", "kg_rag.mcp_server"],
       "cwd": "w:/git/Learnig Lab/KG",
       "env": {
-        "ACTIVE_PROJECT": "Upgrader"
+        "KG_REPO_ROOT": "w:/git/Bladed",
+        "KG_PROJECT_NAME": "Upgrader",
+        "KG_PROJECT_DESCRIPTION": "BladedX Upgrader project",
+        "KG_SCOPE_PATHS": "BladedX/Upgrader",
+        "KG_CACHE_DIR": "w:/git/Learnig Lab/KG/data"
       }
     }
   }

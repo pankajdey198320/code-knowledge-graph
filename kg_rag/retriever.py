@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from kg_rag.embeddings import KGEmbedder
 from kg_rag.models import CodeEntityType, Entity, KnowledgeGraph, Relation
+
+if TYPE_CHECKING:
+    from kg_rag.embeddings import KGEmbedder
 
 
 @dataclass
@@ -34,7 +37,11 @@ class GraphRetriever:
         hops: int = 2,
     ) -> None:
         self.kg = kg
-        self.embedder = embedder or KGEmbedder()
+        if embedder is None:
+            from kg_rag.embeddings import KGEmbedder
+
+            embedder = KGEmbedder()
+        self.embedder = embedder
         self.top_k = top_k
         self.hops = hops
 

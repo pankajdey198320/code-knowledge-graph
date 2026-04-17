@@ -9,7 +9,15 @@ include = ["kg_rag*"]
 name = "kg-code-rag"
 version = "0.1.0"
 description = "Source-code Knowledge Graph + MCP query tool for mono-repos"
+readme = "README.md"
 requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     # Graph & embeddings
     "networkx>=3.0",
@@ -38,9 +46,11 @@ dependencies = [
 [project.optional-dependencies]
 neo4j = ["neo4j>=5.0"]
 dev = [
+    "build>=1.2",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "ruff>=0.1",
+    "twine>=5.0",
     "mypy>=1.5",
 ]
 
