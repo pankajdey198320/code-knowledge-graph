@@ -14,8 +14,14 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from kg_rag.config import settings
-from kg_rag.indexer import index_repo, load_graph, save_graph
-from kg_rag.models import CodeEntityType, KnowledgeGraph
+from kg_rag.indexer import (
+    index_repo,
+    list_indexed_projects,
+    load_graph,
+    load_graph_with_metadata,
+    save_graph,
+)
+from kg_rag.models import CodeEntityType, GraphMetadata, KnowledgeGraph
 from kg_rag.projects import ProjectsConfig
 from kg_rag.retriever import GraphRetriever
 
@@ -26,6 +32,7 @@ logger = logging.getLogger(__name__)
 # ======================================================================
 
 _kg: KnowledgeGraph | None = None
+_metadata: GraphMetadata | None = None
 _retriever: GraphRetriever | None = None
 _embedder_loaded = False
 _projects_cfg: ProjectsConfig = ProjectsConfig.load()
@@ -45,7 +52,7 @@ def _cache_path_for(project: str) -> Path:
 
 def _load_graph(project: str | None = None) -> KnowledgeGraph:
     """Load (or build) the graph for a project. Called once at startup."""
-    global _kg, _active_project
+    global _kg, _metadata, _active_project
     project = _projects_cfg.default_project_name(project or _active_project)
 
     if _kg is not None and project == _active_project:
@@ -54,7 +61,7 @@ def _load_graph(project: str | None = None) -> KnowledgeGraph:
     cache = _cache_path_for(project)
     if cache.exists():
         print(f"[kg-mcp] Loading '{project}' graph from {cache} ...", file=sys.stderr)
-        _kg = load_graph(cache)
+        _kg, _metadata = load_graph_with_metadata(cache)
     else:
         # Try to build the project scope
         repo_root = _projects_cfg.get_repo_root()
@@ -62,7 +69,14 @@ def _load_graph(project: str | None = None) -> KnowledgeGraph:
         scope_paths = _projects_cfg.resolve_paths(project) if scope else None
         print(f"[kg-mcp] No cache – indexing project '{project}' ...", file=sys.stderr)
         _kg = index_repo(repo_root, show_progress=True, scope_paths=scope_paths)
-        save_graph(_kg, cache)
+        
+        # Create metadata for this index
+        _metadata = GraphMetadata(
+            project_name=project,
+            repo_root=str(repo_root),
+            scope_paths=[str(p.relative_to(repo_root)) for p in scope_paths] if scope_paths else ["."],
+        )
+        save_graph(_kg, cache, metadata=_metadata)
 
     _active_project = project
     print(
@@ -70,6 +84,8 @@ def _load_graph(project: str | None = None) -> KnowledgeGraph:
         f"{len(_kg.relations)} relations",
         file=sys.stderr,
     )
+    if _metadata:
+        print(f"[kg-mcp] Indexed: {_metadata.indexed_at}", file=sys.stderr)
     return _kg
 
 
@@ -406,14 +422,21 @@ def reindex_repo(repo_path: str = "") -> str:
     Args:
         repo_path: Path to the repo root. Uses configured repo root if empty.
     """
-    global _kg, _retriever, _embedder_loaded
+    global _kg, _metadata, _retriever, _embedder_loaded
     root = Path(repo_path).resolve() if repo_path else _projects_cfg.get_repo_root()
 
     scope = _projects_cfg.projects.get(_active_project)
     scope_paths = _projects_cfg.resolve_paths(_active_project) if scope else None
 
     _kg = index_repo(root, show_progress=False, scope_paths=scope_paths)
-    save_graph(_kg, _cache_path_for(_active_project))
+    
+    # Create metadata
+    _metadata = GraphMetadata(
+        project_name=_active_project,
+        repo_root=str(root),
+        scope_paths=[str(p.relative_to(root)) for p in scope_paths] if scope_paths else ["."],
+    )
+    save_graph(_kg, _cache_path_for(_active_project), metadata=_metadata)
 
     # Reset the retriever so it picks up the new graph
     _retriever = None
@@ -435,16 +458,36 @@ def list_projects() -> str:
     exists.  The currently active project is marked with *.
     """
     cfg = ProjectsConfig.load()  # re-read in case file was edited
-    if not cfg.projects:
-        return "No projects configured. Supply MCP env config or add projects.json."
-    lines: list[str] = [f"Repo root: {cfg.get_repo_root()}\n"]
-    for name, scope in cfg.projects.items():
-        marker = " *" if name == _active_project else ""
-        cached = "cached" if cfg.graph_cache_path(name).exists() else "not cached"
-        lines.append(f"- {name}{marker}  ({cached})")
-        if scope.description:
-            lines.append(f"    {scope.description}")
-        lines.append(f"    paths: {', '.join(scope.paths)}")
+    lines: list[str] = []
+    
+    if cfg.projects:
+        lines.append(f"📁 Configured projects (repo root: {cfg.get_repo_root()})\n")
+        for name, scope in cfg.projects.items():
+            marker = " *" if name == _active_project else ""
+            cached = "cached" if cfg.graph_cache_path(name).exists() else "not cached"
+            lines.append(f"- {name}{marker}  ({cached})")
+            if scope.description:
+                lines.append(f"    {scope.description}")
+            lines.append(f"    paths: {', '.join(scope.paths)}")
+    else:
+        lines.append("No projects configured. Supply MCP env config or add projects.json.")
+    
+    # Also show indexed projects from registry
+    indexed = list_indexed_projects()
+    if indexed:
+        lines.append(f"\n📊 Indexed graphs in registry ({len(indexed)}):")
+        for info in indexed:
+            marker = " *" if info.get('project_name') == _active_project else ""
+            lines.append(f"\n- {info['project_name'] or '(unnamed)'}{marker}")
+            lines.append(f"    Entities: {info['entity_count']}, Relations: {info['relation_count']}")
+            lines.append(f"    Indexed: {info['indexed_at']}")
+            if info.get('has_git_history'):
+                lines.append(f"    Git history: ✓")
+            if info.get('has_work_items'):
+                lines.append(f"    Work items: ✓")
+            if info['scope_paths']:
+                lines.append(f"    Scope: {', '.join(info['scope_paths'])}")
+    
     return "\n".join(lines)
 
 
@@ -460,7 +503,7 @@ def switch_project(project_name: str) -> str:
     Args:
         project_name: Name of a project from MCP config or projects.json.
     """
-    global _kg, _retriever, _embedder_loaded, _active_project, _projects_cfg
+    global _kg, _metadata, _retriever, _embedder_loaded, _active_project, _projects_cfg
     _projects_cfg = ProjectsConfig.load()  # re-read
 
     if project_name not in _projects_cfg.projects:
@@ -470,12 +513,16 @@ def switch_project(project_name: str) -> str:
     _retriever = None
     _embedder_loaded = False
     _kg = None
+    _metadata = None
 
     _load_graph(project_name)
-    return (
+    result = (
         f"Switched to project '{project_name}'. "
         f"{len(_kg.entities)} entities, {len(_kg.relations)} relations."
     )
+    if _metadata and _metadata.indexed_at:
+        result += f"\nIndexed: {_metadata.indexed_at}"
+    return result
 
 
 # --- Tool: index project --------------------------------------------------
@@ -497,6 +544,32 @@ def index_project(project_name: str) -> str:
 
     root = _projects_cfg.get_repo_root()
     scope_paths = _projects_cfg.resolve_paths(project_name)
+    
+    # Create metadata for this index
+    from kg_rag.models import GraphMetadata
+    metadata = GraphMetadata(
+        project_name=project_name,
+        repo_root=str(root),
+        scope_paths=[str(p.relative_to(root)) for p in scope_paths] if scope_paths else ["."],
+    )
+
+    kg = index_repo(root, show_progress=False, scope_paths=scope_paths)
+    cache = _cache_path_for(project_name)
+    save_graph(kg, cache, metadata=metadata)
+
+    # If this is the active project, reload it
+    if project_name == _active_project:
+        global _kg, _metadata, _retriever, _embedder_loaded
+        _kg = kg
+        _metadata = metadata
+        _retriever = None
+        _embedder_loaded = False
+
+    return (
+        f"Indexed project '{project_name}'. "
+        f"{len(kg.entities)} entities, {len(kg.relations)} relations. "
+        f"Cached to {cache}"
+    )
 
     print(f"[kg-mcp] Indexing project '{project_name}' ...", file=sys.stderr)
     kg = index_repo(root, show_progress=False, scope_paths=scope_paths)
@@ -515,6 +588,101 @@ def index_project(project_name: str) -> str:
         f"Cached to {cache}."
     )
 
+# --- Tool: get project metadata --------------------------------------------
+
+
+@mcp.tool()
+def get_project_metadata() -> str:
+    """Get detailed metadata about the currently active project.
+    
+    Returns information about when it was indexed, what paths were included,
+    whether git history and work items were indexed, etc.
+    """
+    if _metadata is None:
+        return f"No metadata available for project '{_active_project}'."
+    
+    lines = [
+        f"📊 Project Metadata: {_metadata.project_name or _active_project}",
+        "",
+        f"Repository: {_metadata.repo_root}",
+        f"Indexed at: {_metadata.indexed_at or 'unknown'}",
+        f"Entities: {_metadata.entity_count}",
+        f"Relations: {_metadata.relation_count}",
+        "",
+        f"Scope paths:",
+    ]
+    for p in _metadata.scope_paths:
+        lines.append(f"  - {p}")
+    
+    if _metadata.extensions:
+        lines.append(f"\nFile extensions: {', '.join(_metadata.extensions)}")
+    
+    features = []
+    if _metadata.has_git_history:
+        git_info = f"Git history (since {_metadata.git_since})" if _metadata.git_since else "Git history"
+        features.append(git_info)
+    if _metadata.has_work_items:
+        features.append("Work items from ADO")
+    
+    if features:
+        lines.append(f"\nFeatures: {', '.join(features)}")
+    
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_indexed_project_info(project_name: str) -> str:
+    """Get detailed information about any indexed project from the registry.
+    
+    Args:
+        project_name: Name of the project to query (can be partial match).
+    """
+    indexed = list_indexed_projects()
+    if not indexed:
+        return "No indexed projects found in the registry."
+    
+    # Find matching projects (partial name match)
+    name_lower = project_name.lower()
+    matches = [
+        p for p in indexed 
+        if name_lower in (p.get('project_name') or '').lower()
+    ]
+    
+    if not matches:
+        all_names = [p.get('project_name', '(unnamed)') for p in indexed]
+        return f"No projects matching '{project_name}'. Available: {', '.join(all_names)}"
+    
+    if len(matches) > 1:
+        names = [p.get('project_name', '(unnamed)') for p in matches]
+        return f"Multiple matches found: {', '.join(names)}. Please be more specific."
+    
+    info = matches[0]
+    lines = [
+        f"📊 Project: {info.get('project_name') or '(unnamed)'}",
+        "",
+        f"Repository: {info['repo_root']}",
+        f"Indexed at: {info['indexed_at']}",
+        f"Entities: {info['entity_count']}",
+        f"Relations: {info['relation_count']}",
+        "",
+        f"Graph file: {info['graph_path']}",
+    ]
+    
+    if info.get('scope_paths'):
+        lines.append("\nScope paths:")
+        for p in info['scope_paths']:
+            lines.append(f"  - {p}")
+    
+    features = []
+    if info.get('has_git_history'):
+        features.append("Git history")
+    if info.get('has_work_items'):
+        features.append("Work items")
+    
+    if features:
+        lines.append(f"\nFeatures: {', '.join(features)}")
+    
+    return "\n".join(lines)
 
 # --- Tool: code ownership -------------------------------------------------
 

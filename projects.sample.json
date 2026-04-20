@@ -1,0 +1,22 @@
+{
+  "repo_root": "C:/path/to/monorepo",
+  "cache_dir": "C:/path/to/KG/data",
+  "projects": {
+    "_full_": {
+      "description": "Full mono-repo index",
+      "paths": ["."]
+    },
+    "Workflow": {
+      "description": "Workflow backend and CLI",
+      "paths": ["src/Workflow"]
+    },
+    "Upgrader": {
+      "description": "Upgrader project",
+      "paths": ["src/Upgrader"]
+    },
+    "Calculation": {
+      "description": "Calculation backend and CLI",
+      "paths": ["src/Calculation"]
+    }
+  }
+}

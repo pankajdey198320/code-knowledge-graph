@@ -161,3 +161,30 @@ class KnowledgeGraph(BaseModel):
             frontier = next_frontier
 
         return result
+
+
+# ======================================================================
+# Graph persistence metadata
+# ======================================================================
+
+
+class GraphMetadata(BaseModel):
+    """Metadata about an indexed knowledge graph."""
+
+    project_name: str = Field(default="", description="Project name from configuration")
+    repo_root: str = Field(default="", description="Absolute path to repository root")
+    scope_paths: list[str] = Field(default_factory=list, description="Indexed scope paths (relative to repo_root)")
+    indexed_at: str = Field(default="", description="ISO timestamp when the graph was created")
+    entity_count: int = Field(default=0)
+    relation_count: int = Field(default=0)
+    has_git_history: bool = Field(default=False)
+    has_work_items: bool = Field(default=False)
+    extensions: list[str] = Field(default_factory=list, description="Indexed file extensions")
+    git_since: str = Field(default="", description="Git history time window if applicable")
+
+
+class PersistedGraph(BaseModel):
+    """Wrapper for graph + metadata for persistent storage."""
+
+    metadata: GraphMetadata
+    graph: KnowledgeGraph

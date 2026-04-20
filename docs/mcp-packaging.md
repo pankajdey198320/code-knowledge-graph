@@ -62,11 +62,11 @@ Benefits:
 - no runtime switching needed
 - simpler permissions and isolation
 
-### Mode 2: Multi-project server from inline MCP JSON
+### Mode 2: Multi-project server from config file
 
 Best when one MCP entry should expose `list_projects`, `switch_project`, and `index_project` across several named scopes.
 
-Example env payload:
+Example config file:
 
 ```json
 {
@@ -85,7 +85,26 @@ Example env payload:
 }
 ```
 
-Pass that JSON in `KG_PROJECTS_JSON`, or put it in an external file and point `KG_PROJECTS_FILE` at it.
+Reference that file from MCP settings:
+
+```json
+{
+  "servers": {
+    "kg-multi": {
+      "type": "stdio",
+      "command": "C:/tools/kg/.venv/Scripts/python.exe",
+      "args": ["-m", "kg_rag.mcp_server"],
+      "cwd": "C:/tools/kg",
+      "env": {
+        "ACTIVE_PROJECT": "Upgrader",
+        "KG_PROJECTS_FILE": "C:/tools/kg/projects.sample.json"
+      }
+    }
+  }
+}
+```
+
+`KG_PROJECTS_JSON` is still supported, but `KG_PROJECTS_FILE` is the better default for larger configs.
 
 Benefits:
 

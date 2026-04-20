@@ -62,7 +62,7 @@ def main_index() -> None:
     )
     args = parser.parse_args()
 
-    from kg_rag.indexer import index_repo, save_graph
+    from kg_rag.indexer import index_repo, list_indexed_projects, save_graph
     from kg_rag.projects import ProjectsConfig
 
     cfg = ProjectsConfig.load()
@@ -79,12 +79,24 @@ def main_index() -> None:
                 if scope.description:
                     print(f"    {scope.description}")
                 print(f"    paths: {', '.join(scope.paths)}")
+        
+        # Also show indexed projects from registry
+        indexed = list_indexed_projects()
+        if indexed:
+            print(f"\n📊 Indexed graphs in registry ({len(indexed)}):")
+            for info in indexed:
+                print(f"\n  Project: {info['project_name'] or '(unnamed)'}")
+                print(f"    Entities: {info['entity_count']}, Relations: {info['relation_count']}")
+                print(f"    Indexed: {info['indexed_at']}")
+                print(f"    Path: {info['graph_path']}")
+                if info['scope_paths']:
+                    print(f"    Scope: {', '.join(info['scope_paths'])}")
         return
 
     # Determine repo root
     repo = Path(args.repo_root).resolve() if args.repo_root else cfg.get_repo_root()
 
-    # Determine scope paths and output
+    # Determine scope paths, project name, and output path
     scope_paths: list[Path] | None = None
     project_name = args.project
     if project_name is None and not args.repo_root and not args.paths and cfg.projects:
@@ -99,7 +111,17 @@ def main_index() -> None:
         output = Path(args.output) if args.output else cfg.graph_cache_path(project_name)
     elif args.paths:
         scope_paths = [repo / p.strip() for p in args.paths.split(",")]
-        output = Path(args.output) if args.output else settings.GRAPH_CACHE_PATH
+        # Auto-generate a project name from the paths
+        if not args.output:
+            from hashlib import sha1
+            path_str = ",".join(sorted([p.strip() for p in args.paths.split(",")]))
+            project_name = "_".join(p.strip().replace("/", "_").replace("\\", "_") for p in args.paths.split(","))[:50]
+            repo_hash = sha1(str(repo).encode("utf-8")).hexdigest()[:10]
+            cache_dir = settings.DATA_DIR if settings.DATA_DIR.exists() else Path("data")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            output = cache_dir / f"{project_name}-{repo_hash}.pkl"
+        else:
+            output = Path(args.output)
     else:
         output = Path(args.output) if args.output else settings.GRAPH_CACHE_PATH
 
@@ -111,6 +133,10 @@ def main_index() -> None:
         print(f"  Scope paths: {[str(p) for p in scope_paths]}")
 
     kg = index_repo(repo, extensions=extensions, show_progress=True, scope_paths=scope_paths)
+
+    # Track git/ado flags for metadata
+    has_git = False
+    has_workitems = False
 
     # Optionally merge git history layer
     if args.git:
@@ -127,6 +153,7 @@ def main_index() -> None:
         git_ent = len(git_kg.entities)
         git_rel = len(git_kg.relations)
         print(f"  Git layer: {git_ent} entities, {git_rel} relations merged")
+        has_git = True
 
     # Optionally hydrate work items from Azure DevOps
     if args.ado:
@@ -135,8 +162,22 @@ def main_index() -> None:
         print("Hydrating work items from Azure DevOps ...")
         count = hydrate_work_items(kg)
         print(f"  Hydrated {count} work item(s)")
+        has_workitems = count > 0
 
-    out = save_graph(kg, output)
+    # Create metadata for this index
+    from kg_rag.models import GraphMetadata
+
+    metadata = GraphMetadata(
+        project_name=project_name or "",
+        repo_root=str(repo),
+        scope_paths=[str(p.relative_to(repo)) for p in scope_paths] if scope_paths else ["."],
+        extensions=extensions,
+        has_git_history=has_git,
+        has_work_items=has_workitems,
+        git_since=args.since if args.git else "",
+    )
+
+    out = save_graph(kg, output, metadata=metadata)
     print(f"\nDone. {len(kg.entities)} entities, {len(kg.relations)} relations")
     print(f"Saved to {out}")
 

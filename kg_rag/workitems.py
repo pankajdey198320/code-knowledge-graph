@@ -8,6 +8,7 @@ from base64 import b64encode
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from kg_rag.config import settings
@@ -44,12 +45,21 @@ class AdoClient:
                 "ADO_ORG and ADO_WI_READ must be set (in .env or environment) "
                 "to use Azure DevOps work item hydration."
             )
+        # Check for problematic characters that Azure DevOps might reject
+        if ":" in self.org or (self.project and ":" in self.project):
+            logger.warning(
+                "ADO_ORG or ADO_PROJECT contains ':' which may cause HTTP 400 errors. "
+                "Consider using URL-safe names. org=%r, project=%r",
+                self.org, self.project
+            )
         # Basic auth header: base64(":" + PAT)
         token = b64encode(f":{self.pat}".encode()).decode()
         self._auth_header = f"Basic {token}"
-        self._base = f"https://dev.azure.com/{self.org}"
+        # URL-encode org and project to handle special characters like colons
+        self._base = f"https://dev.azure.com/{quote(self.org, safe='')}"
         if self.project:
-            self._base += f"/{self.project}"
+            self._base += f"/{quote(self.project, safe='')}"
+        logger.debug("ADO API base URL: %s", self._base)
 
     # ------------------------------------------------------------------
     # Low-level HTTP
@@ -90,14 +100,28 @@ class AdoClient:
             batch = ids[i : i + _ADO_BATCH_SIZE]
             id_str = ",".join(str(x) for x in batch)
             fields = "System.Title,System.WorkItemType,System.State,System.Description,System.Tags,System.AreaPath"
-            url = (
-                f"{self._base}/_apis/wit/workitems?ids={id_str}"
-                f"&fields={fields}&api-version=7.1"
-            )
+            # Properly encode query parameters
+            params = urlencode({
+                "ids": id_str,
+                "fields": fields,
+                "api-version": "7.1"
+            })
+            url = f"{self._base}/_apis/wit/workitems?{params}"
+            logger.debug("Fetching work items from URL: %s", url)
             try:
                 data = self._get(url)
-            except (HTTPError, URLError) as exc:
-                logger.warning("ADO API error for batch starting %s: %s", batch[0], exc)
+            except HTTPError as exc:
+                response_body = exc.read().decode("utf-8", errors="replace")
+                logger.warning(
+                    "ADO API error for batch ids %s: %s. URL: %s Response body: %s",
+                    batch,
+                    exc,
+                    url,
+                    response_body,
+                )
+                continue
+            except URLError as exc:
+                logger.warning("ADO API error for batch ids %s: %s", batch, exc)
                 continue
 
             for item in data.get("value", []):

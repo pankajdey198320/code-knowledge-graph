@@ -146,6 +146,27 @@ Add to your MCP settings (`.vscode/mcp.json` or user settings):
 }
 ```
 
+For a multi-project server, prefer pointing MCP at a config file rather than embedding a large JSON string in the settings:
+
+```json
+{
+  "servers": {
+    "kg-multi": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "kg_rag.mcp_server"],
+      "cwd": "C:\\path\\to\\KG",
+      "env": {
+        "ACTIVE_PROJECT": "Workflow",
+        "KG_PROJECTS_FILE": "C:\\path\\to\\KG\\projects.sample.json"
+      }
+    }
+  }
+}
+```
+
+See [projects.sample.json](projects.sample.json) for the expected file schema.
+
 `projects.json` is now optional. MCP runtime configuration takes precedence in this order:
 
 1. `KG_PROJECTS_JSON` — inline JSON config for multiple named scopes.
@@ -163,7 +184,7 @@ Add to your MCP settings (`.vscode/mcp.json` or user settings):
 | `KG_PROJECT_DESCRIPTION` | Optional description shown by `list_projects` |
 | `KG_CACHE_DIR` | Optional cache directory for pickled graph files |
 | `KG_PROJECTS_JSON` | Full inline JSON config with `repo_root`, optional `cache_dir`, and `projects` |
-| `KG_PROJECTS_FILE` | Path to a JSON config file with the same schema as `KG_PROJECTS_JSON` |
+| `KG_PROJECTS_FILE` | Path to a JSON config file with the same schema as `KG_PROJECTS_JSON`; recommended for multi-project MCP setups |
 
 ### Packaging pattern for many MCP servers
 
@@ -173,7 +194,7 @@ Package one reusable `kg-code-rag` distribution and configure many MCP server en
 - Install the package once in a shared virtual environment.
 - Define one MCP server entry per repo or per focused scope by setting env vars in MCP config.
 - Share a cache directory across servers; cache file names are repo-hashed to avoid collisions.
-- Use `KG_PROJECTS_JSON` or `KG_PROJECTS_FILE` only when one server needs multiple switchable scopes.
+- Prefer `KG_PROJECTS_FILE` when one server needs multiple switchable scopes; use `KG_PROJECTS_JSON` only for small self-contained configs.
 
 See `docs/mcp-packaging.md` for a concrete packaging plan.
 
