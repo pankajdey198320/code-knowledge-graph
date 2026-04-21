@@ -46,8 +46,14 @@ def main_index() -> None:
     parser.add_argument(
         "--git",
         action="store_true",
-        default=False,
-        help="Include git commit history (ownership, co-change, work-item links)",
+        default=True,
+        help="Include git commit history (ownership, co-change, work-item links) [default: enabled]",
+    )
+    parser.add_argument(
+        "--no-git",
+        action="store_false",
+        dest="git",
+        help="Disable git history extraction",
     )
     parser.add_argument(
         "--since",
@@ -57,8 +63,14 @@ def main_index() -> None:
     parser.add_argument(
         "--ado",
         action="store_true",
-        default=False,
-        help="Hydrate work items from Azure DevOps REST API (requires ADO_ORG, ADO_PAT in .env)",
+        default=True,
+        help="Hydrate work items from Azure DevOps REST API (requires ADO_ORG, ADO_PAT in .env) [default: enabled]",
+    )
+    parser.add_argument(
+        "--no-ado",
+        action="store_false",
+        dest="ado",
+        help="Disable ADO work item hydration",
     )
     args = parser.parse_args()
 

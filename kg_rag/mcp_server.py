@@ -70,11 +70,47 @@ def _load_graph(project: str | None = None) -> KnowledgeGraph:
         print(f"[kg-mcp] No cache – indexing project '{project}' ...", file=sys.stderr)
         _kg = index_repo(repo_root, show_progress=True, scope_paths=scope_paths)
         
+        # Track git/ado flags for metadata
+        has_git = False
+        has_workitems = False
+        
+        # Add git history (enabled by default, can opt-out via env)
+        enable_git = settings.REPO_ROOT.exists()  # Only if in a git repo
+        if enable_git:
+            try:
+                from kg_rag.git_history import build_git_history_graph, merge_git_layer
+                print("[kg-mcp] Extracting git history ...", file=sys.stderr)
+                git_kg = build_git_history_graph(
+                    repo_root=repo_root,
+                    scope_paths=scope_paths,
+                    since="4 years ago",
+                    index_extensions=settings.INDEX_EXTENSIONS,
+                )
+                merge_git_layer(_kg, git_kg)
+                print(f"[kg-mcp] Git layer: {len(git_kg.entities)} entities, {len(git_kg.relations)} relations", file=sys.stderr)
+                has_git = True
+            except Exception as e:
+                print(f"[kg-mcp] Warning: Git history extraction failed: {e}", file=sys.stderr)
+        
+        # Hydrate work items if ADO credentials are available
+        if settings.ADO_ORG and settings.ADO_PAT:
+            try:
+                from kg_rag.workitems import hydrate_work_items
+                print("[kg-mcp] Hydrating work items from Azure DevOps ...", file=sys.stderr)
+                count = hydrate_work_items(_kg)
+                print(f"[kg-mcp] Hydrated {count} work item(s)", file=sys.stderr)
+                has_workitems = count > 0
+            except Exception as e:
+                print(f"[kg-mcp] Warning: Work item hydration failed: {e}", file=sys.stderr)
+        
         # Create metadata for this index
         _metadata = GraphMetadata(
             project_name=project,
             repo_root=str(repo_root),
             scope_paths=[str(p.relative_to(repo_root)) for p in scope_paths] if scope_paths else ["."],
+            has_git_history=has_git,
+            has_work_items=has_workitems,
+            git_since="4 years ago" if has_git else "",
         )
         save_graph(_kg, cache, metadata=_metadata)
 
@@ -125,6 +161,43 @@ def _get_kg() -> KnowledgeGraph:
         _load_graph()
     assert _kg is not None
     return _kg
+
+
+def _resolve_file_path(file_path: str, kg: KnowledgeGraph) -> str | None:
+    """Resolve a file path to an exact match in the graph.
+    
+    Tries:
+    1. Exact match (user provided full path relative to repo root)
+    2. Suffix match (user provided path relative to scope folder)
+    
+    Returns the canonical path from the graph, or None if not found.
+    Raises ValueError if multiple matches are found (ambiguous).
+    """
+    # Normalize to forward slashes
+    file_path = file_path.replace("\\", "/")
+    
+    # Try exact match first
+    file_entities = [e for e in kg.entities if e.entity_type.value == "file" and e.file_path == file_path]
+    if file_entities:
+        return file_path
+    
+    # Try suffix match (e.g., user provided "src/File.cs" but graph has "BladedX/Workflow/src/File.cs")
+    matches = [
+        e.file_path for e in kg.entities 
+        if e.entity_type.value == "file" and e.file_path and e.file_path.endswith("/" + file_path)
+    ]
+    
+    if not matches:
+        return None
+    
+    if len(matches) > 1:
+        raise ValueError(
+            f"Ambiguous path '{file_path}' matches multiple files:\n" + 
+            "\n".join(f"  - {m}" for m in matches[:10]) +
+            f"\n... ({len(matches)} total). Please provide a more specific path."
+        )
+    
+    return matches[0]
 
 
 # ======================================================================
@@ -695,19 +768,37 @@ def code_ownership(file_path: str) -> str:
         file_path: Relative path of the file inside the repo.
     """
     kg = _get_kg()
+    
+    # Resolve the file path (handles both exact and suffix matches)
+    try:
+        resolved_path = _resolve_file_path(file_path, kg)
+    except ValueError as e:
+        return str(e)
+    
+    if not resolved_path:
+        return f"No file found matching '{file_path}'. Run indexing with --git to include git history."
+    normalized_input = file_path.replace("\\", "/")
+    if resolved_path != normalized_input:
+        logger.info(
+            "Resolved file path for code_ownership: input='%s' -> resolved='%s'",
+            normalized_input,
+            resolved_path,
+        )
+    else:
+        logger.info("Resolved file path for code_ownership: '%s'", resolved_path)
     mods = [
         r for r in kg.relations
-        if r.source == file_path
+        if r.source == resolved_path
         and r.relation_type.value == "MODIFIED_BY"
     ]
     if not mods:
-        return f"No ownership data for '{file_path}'. Run indexing with --git to include git history."
+        return f"No ownership data for '{resolved_path}'. Run indexing with --git to include git history."
     # Sort by commit count descending
     mods.sort(
         key=lambda r: int(r.metadata.get("commit_count", "0")),
         reverse=True,
     )
-    lines = [f"Ownership for {file_path}:\n"]
+    lines = [f"Ownership for {resolved_path}:\n"]
     for r in mods:
         email = r.metadata.get("email", "?")
         count = r.metadata.get("commit_count", "?")
@@ -727,6 +818,16 @@ def change_coupling(file_path: str, min_count: int = 3) -> str:
         min_count: Minimum co-change count to include (default 3).
     """
     kg = _get_kg()
+    
+    # Resolve the file path (handles both exact and suffix matches)
+    try:
+        resolved_path = _resolve_file_path(file_path, kg)
+    except ValueError as e:
+        return str(e)
+    
+    if not resolved_path:
+        return f"No file found matching '{file_path}'."
+    
     # CO_CHANGED edges go both directions
     coupled: list[tuple[str, int]] = []
     for r in kg.relations:
@@ -735,14 +836,14 @@ def change_coupling(file_path: str, min_count: int = 3) -> str:
         cnt = int(r.metadata.get("co_change_count", "0"))
         if cnt < min_count:
             continue
-        if r.source == file_path:
+        if r.source == resolved_path:
             coupled.append((r.target, cnt))
-        elif r.target == file_path:
+        elif r.target == resolved_path:
             coupled.append((r.source, cnt))
     if not coupled:
-        return f"No co-change data for '{file_path}'. Run indexing with --git to include git history."
+        return f"No co-change data for '{resolved_path}'. Run indexing with --git to include git history."
     coupled.sort(key=lambda x: x[1], reverse=True)
-    lines = [f"Files that frequently change with {file_path}:\n"]
+    lines = [f"Files that frequently change with {resolved_path}:\n"]
     for partner, cnt in coupled[:20]:
         lines.append(f"  {partner}: {cnt} co-changes")
     return "\n".join(lines)
@@ -787,14 +888,24 @@ def work_items_for_code(file_path: str) -> str:
         file_path: Relative path of the file inside the repo.
     """
     kg = _get_kg()
+    
+    # Resolve the file path (handles both exact and suffix matches)
+    try:
+        resolved_path = _resolve_file_path(file_path, kg)
+    except ValueError as e:
+        return str(e)
+    
+    if not resolved_path:
+        return f"No file found matching '{file_path}'."
+    
     # Find commits that touched this file
     commit_keys = [
         r.target
         for r in kg.relations
-        if r.source == file_path and r.relation_type.value == "COMMITTED_IN"
+        if r.source == resolved_path and r.relation_type.value == "COMMITTED_IN"
     ]
     if not commit_keys:
-        return f"No commit data for '{file_path}'."
+        return f"No commit data for '{resolved_path}'."
 
     # Find work items linked from those commits
     wi_map: dict[str, list[str]] = {}  # wid → list of commit shas
@@ -804,12 +915,12 @@ def work_items_for_code(file_path: str) -> str:
             wi_map.setdefault(wid, []).append(r.source)
 
     if not wi_map:
-        return f"No work items linked to '{file_path}' via commit messages."
+        return f"No work items linked to '{resolved_path}' via commit messages."
 
     # Try to include hydrated details
     kg_wi = {e.metadata.get("id", ""): e for e in kg.entities if e.entity_type.value == "work_item"}
 
-    lines = [f"Work items linked to {file_path}:\n"]
+    lines = [f"Work items linked to {resolved_path}:\n"]
     for wid, commits in sorted(wi_map.items()):
         wi_ent = kg_wi.get(wid)
         if wi_ent and wi_ent.metadata.get("title"):
@@ -957,6 +1068,11 @@ def blame_context(file_path: str) -> str:
 
 def main() -> None:
     """Run the MCP server on stdio transport."""
+    # Eagerly load the graph at startup (instead of waiting for first tool call)
+    print("[kg-mcp] Starting server, loading graph...", file=sys.stderr)
+    _load_graph()
+    print("[kg-mcp] Server ready.", file=sys.stderr)
+    
     mcp.run(transport="stdio")
 
 

@@ -45,20 +45,20 @@ class AdoClient:
                 "ADO_ORG and ADO_WI_READ must be set (in .env or environment) "
                 "to use Azure DevOps work item hydration."
             )
-        # Check for problematic characters that Azure DevOps might reject
-        if ":" in self.org or (self.project and ":" in self.project):
-            logger.warning(
-                "ADO_ORG or ADO_PROJECT contains ':' which may cause HTTP 400 errors. "
-                "Consider using URL-safe names. org=%r, project=%r",
-                self.org, self.project
-            )
+        
+        # Handle full URLs in ADO_ORG (extract just the org name)
+        if self.org.startswith("https://dev.azure.com/"):
+            self.org = self.org.replace("https://dev.azure.com/", "").rstrip("/")
+        elif self.org.startswith("http://dev.azure.com/"):
+            self.org = self.org.replace("http://dev.azure.com/", "").rstrip("/")
+        
         # Basic auth header: base64(":" + PAT)
         token = b64encode(f":{self.pat}".encode()).decode()
         self._auth_header = f"Basic {token}"
-        # URL-encode org and project to handle special characters like colons
-        self._base = f"https://dev.azure.com/{quote(self.org, safe='')}"
+        # Construct base URL with just the org name
+        self._base = f"https://dev.azure.com/{self.org}"
         if self.project:
-            self._base += f"/{quote(self.project, safe='')}"
+            self._base += f"/{self.project}"
         logger.debug("ADO API base URL: %s", self._base)
 
     # ------------------------------------------------------------------
@@ -146,6 +146,8 @@ _CACHE_FILE = "workitems_cache.json"
 
 
 def _cache_path() -> Path:
+    """Return the local path for cached work item data (in cache directory)."""
+    settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
     return settings.DATA_DIR / _CACHE_FILE
 
 

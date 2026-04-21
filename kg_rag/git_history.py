@@ -239,6 +239,16 @@ def build_git_history_graph(
     # Single pass: all commits (incl. merges) for file history & ownership
     raw = _run_git_log(repo_root, scope_paths, since, max_count)
     commits = _parse_git_log(raw)
+    
+    # Helper to normalize file paths to match parser-created entities
+    def _normalize_git_path(git_path: str) -> str:
+        """Convert git path to match how parsers create file entities.
+        
+        Git returns paths relative to repo_root (e.g., 'src/File.cs').
+        Parsers create entities with paths relative to repo_root (e.g., 'src/File.cs').
+        This ensures consistent forward-slash paths.
+        """
+        return git_path.replace("\\", "/")
 
     # Fetch full message bodies for merge commits (WI IDs live there)
     merge_bodies = _fetch_merge_bodies(repo_root, scope_paths, since)
@@ -258,6 +268,9 @@ def build_git_history_graph(
         files = commit.files
         if allowed_exts:
             files = [f for f in files if Path(f).suffix in allowed_exts]
+        
+        # Normalize all file paths to match parser-created entities
+        files = [_normalize_git_path(f) for f in files]
 
         # Skip oversized commits (noise)
         if len(files) > max_files_per_commit:

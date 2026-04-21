@@ -162,7 +162,9 @@ def load_graph_with_metadata(path: Path | None = None) -> tuple[KnowledgeGraph, 
 
 
 def _get_registry_path() -> Path:
-    """Return path to the project registry file."""
+    """Return path to the project registry file (in cache directory)."""
+    # Ensure cache directory exists
+    settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
     return settings.DATA_DIR / "project_registry.json"
 
 

@@ -45,12 +45,11 @@ class Settings:
     ADO_PROJECT: str = os.getenv("ADO_PROJECT", "")
     ADO_PAT: str = os.getenv("ADO_WI_READ", "")
 
-    # Paths
+    # Paths - cache directory resolution: KG_CACHE_DIR → env DATA_DIR → ./data
     PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
-    DATA_DIR: Path = PROJECT_ROOT / "data"
-    GRAPH_CACHE_PATH: Path = Path(
-        os.getenv("GRAPH_CACHE_PATH", str(PROJECT_ROOT / "data" / "code_graph.pkl"))
-    )
+    _cache_dir_env = os.getenv("KG_CACHE_DIR", "").strip() or os.getenv("DATA_DIR", "").strip()
+    DATA_DIR: Path = Path(_cache_dir_env).resolve() if _cache_dir_env else PROJECT_ROOT / "data"
+    GRAPH_CACHE_PATH: Path = DATA_DIR / "code_graph.pkl"
 
 
 settings = Settings()
