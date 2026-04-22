@@ -36,6 +36,14 @@ _EXTENSION_MAP: dict[str, str] = {
     ".tsx": "tsx",
     ".js": "javascript",
     ".jsx": "javascript",
+    # Pascal and InnoSetup
+    ".pas": "pascal",
+    ".pp": "pascal",
+    ".dpr": "pascal",
+    ".lpr": "pascal",
+    ".iss": "pascal",
+    # NAnt build files
+    ".build": "nant",
 }
 
 
@@ -67,6 +75,12 @@ def _get_parser(lang: str) -> BaseCodeParser:
     elif lang == "javascript":
         from kg_rag.parsers.typescript_parser import TypeScriptParser
         return TypeScriptParser("javascript")
+    elif lang == "pascal":
+        from kg_rag.parsers.pascal_parser import PascalParser
+        return PascalParser()
+    elif lang == "nant":
+        from kg_rag.parsers.nant_parser import NAntParser
+        return NAntParser()
     raise ValueError(f"No parser for language: {lang}")
 
 
