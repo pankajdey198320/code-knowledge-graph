@@ -73,6 +73,7 @@ def _run_git_log(
 _WI_BRANCH_PATTERNS: list[str] = [
     "refs/remotes/origin/ng/main",
     "refs/remotes/origin/ng/release/*/main",
+    "refs/remotes/origin/master",
 ]
 
 

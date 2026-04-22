@@ -140,18 +140,21 @@ def _summarize_matches(total: int, shown: int, noun: str) -> str:
 
 
 def _ensure_retriever() -> GraphRetriever:
-    """Lazily create the retriever (loads embedding model on first call)."""
+    """Lazily create the retriever (loads embedding model on first call).
+    
+    Note: This may take 30-60 seconds on first run to download the model from HuggingFace.
+    """
     global _retriever, _embedder_loaded
     if _retriever is not None:
         return _retriever
 
     kg = _load_graph()
-    print("[kg-mcp] Loading embedding model (first semantic query) ...", file=sys.stderr)
+    print("[kg-mcp] Loading embedding model (this may take 30-60 seconds on first run)...", file=sys.stderr)
     from kg_rag.embeddings import KGEmbedder
 
     _retriever = GraphRetriever(kg=kg, embedder=KGEmbedder())
     _embedder_loaded = True
-    print("[kg-mcp] Embedder ready.", file=sys.stderr)
+    print("[kg-mcp] Embedder ready. Semantic search is now available.", file=sys.stderr)
     return _retriever
 
 
@@ -1072,6 +1075,17 @@ def main() -> None:
     print("[kg-mcp] Starting server, loading graph...", file=sys.stderr)
     _load_graph()
     print("[kg-mcp] Server ready.", file=sys.stderr)
+    
+    # Optionally pre-load embeddings at startup (default: lazy load on first search)
+    # Set KG_PRELOAD_EMBEDDINGS=1 to download/load the model at startup
+    import os
+    if os.getenv("KG_PRELOAD_EMBEDDINGS", "").strip() in ("1", "true", "yes"):
+        print("[kg-mcp] Pre-loading embedding model (this may take 30-60 seconds)...", file=sys.stderr)
+        try:
+            _ensure_retriever()
+            print("[kg-mcp] Embedding model pre-loaded.", file=sys.stderr)
+        except Exception as e:
+            print(f"[kg-mcp] Warning: Failed to pre-load embeddings: {e}", file=sys.stderr)
     
     mcp.run(transport="stdio")
 

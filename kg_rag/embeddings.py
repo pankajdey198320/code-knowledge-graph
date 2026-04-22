@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 from numpy.typing import NDArray
 from sentence_transformers import SentenceTransformer
@@ -19,7 +21,12 @@ class KGEmbedder:
         local_path = settings.MODELS_DIR / model_name
         if local_path.exists():
             model_name = str(local_path)
+            print(f"[kg-embedder] Loading local model from {local_path}", file=sys.stderr)
+        else:
+            print(f"[kg-embedder] Downloading model '{model_name}' from HuggingFace (this may take a while)...", file=sys.stderr)
+        
         self.model = SentenceTransformer(model_name)
+        print("[kg-embedder] Model loaded successfully", file=sys.stderr)
         self._cache: dict[str, NDArray[np.float32]] = {}
 
     # ------------------------------------------------------------------
