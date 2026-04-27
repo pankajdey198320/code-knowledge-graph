@@ -21,7 +21,7 @@ from kg_rag.indexer import (
     load_graph_with_metadata,
     save_graph,
 )
-from kg_rag.models import CodeEntityType, GraphMetadata, KnowledgeGraph
+from kg_rag.models import CodeEntityType, Entity, GraphMetadata, KnowledgeGraph
 from kg_rag.projects import ProjectsConfig
 from kg_rag.retriever import GraphRetriever
 
@@ -152,7 +152,45 @@ def _ensure_retriever() -> GraphRetriever:
     print("[kg-mcp] Loading embedding model (this may take 30-60 seconds on first run)...", file=sys.stderr)
     from kg_rag.embeddings import KGEmbedder
 
-    _retriever = GraphRetriever(kg=kg, embedder=KGEmbedder())
+    embedder = KGEmbedder()
+    
+    # Try to load cached embeddings
+    cache_dir = _cache_path_for(_active_project).parent
+    embeddings_cache = cache_dir / f"{_active_project}_embeddings.pkl"
+    
+    cache_loaded = embedder.load_cache(embeddings_cache)
+    
+    # Pre-compute embeddings if not cached or if explicitly requested
+    import os
+    if os.getenv("KG_PRELOAD_EMBEDDINGS", "").strip().lower() in ("1", "true", "yes"):
+        if cache_loaded:
+            print(f"[kg-mcp] Embeddings cache loaded from disk ({len(embedder._cache)} entities).", file=sys.stderr)
+        else:
+            # Determine which entity types to skip
+            # Use aggressive filtering for huge codebases (skip methods too, keep only classes/functions)
+            if os.getenv("KG_AGGRESSIVE_EMBEDDING", "").strip().lower() in ("1", "true", "yes"):
+                skip_types = {'file', 'import', 'variable', 'method', 'property', 'field', 'enum', 'struct'}
+                filtering_mode = "aggressive (classes/functions/namespaces only)"
+            else:
+                skip_types = {'file', 'import', 'variable'}
+                filtering_mode = "standard"
+            
+            # Count entities that will be embedded
+            embed_count = sum(1 for e in kg.entities if e.entity_type.value not in skip_types)
+            print(
+                f"[kg-mcp] Pre-computing embeddings for {embed_count:,} entities "
+                f"(skipping {len(kg.entities) - embed_count:,} low-value entities, mode: {filtering_mode})...",
+                file=sys.stderr,
+            )
+            print(f"[kg-mcp] This will take approximately {embed_count // 1000} seconds (batch size: 500).", file=sys.stderr)
+            embedder.embed_graph(kg, skip_entity_types=skip_types, batch_size=500, show_progress=True)
+            embedder.save_cache(embeddings_cache)
+            print("[kg-mcp] All embeddings pre-computed and cached to disk.", file=sys.stderr)
+    elif not cache_loaded:
+        print("[kg-mcp] Embeddings will be computed on-demand (first search may be slow).", file=sys.stderr)
+        print("[kg-mcp] Set KG_PRELOAD_EMBEDDINGS=true to pre-compute all embeddings at startup.", file=sys.stderr)
+    
+    _retriever = GraphRetriever(kg=kg, embedder=embedder)
     _embedder_loaded = True
     print("[kg-mcp] Embedder ready. Semantic search is now available.", file=sys.stderr)
     return _retriever
@@ -218,15 +256,69 @@ mcp = FastMCP(
 )
 
 
-# --- Tool: semantic search ------------------------------------------------
+# --- Tool: keyword search (fast) -----------------------------------------
+
+
+@mcp.tool()
+def search_keywords(query: str, max_results: int = 50) -> str:
+    """Fast keyword-based search across entity names, signatures, and docstrings.
+
+    Use this for quick searches when you know specific keywords or names.
+    For semantic/conceptual searches, use search_code instead (slower but smarter).
+
+    Args:
+        query: Keywords to search for (space-separated, case-insensitive).
+        max_results: Maximum number of results (default 50).
+    """
+    kg = _get_kg()
+    keywords = query.lower().split()
+    
+    matches: list[tuple[Entity, int]] = []
+    for ent in kg.entities:
+        score = 0
+        searchable = (
+            f"{ent.name} {ent.signature or ''} {ent.docstring or ''} "
+            f"{ent.file_path or ''}"
+        ).lower()
+        
+        for kw in keywords:
+            if kw in searchable:
+                score += searchable.count(kw)
+        
+        if score > 0:
+            matches.append((ent, score))
+    
+    if not matches:
+        return f"No entities found matching keywords: {query}"
+    
+    matches.sort(key=lambda x: x[1], reverse=True)
+    shown = matches[:max_results]
+    
+    lines = [
+        f"Found {len(matches)} entities matching keywords: {query}",
+        f"Showing top {len(shown)} by relevance:\n",
+    ]
+    
+    for ent, score in shown:
+        loc = f" ({ent.file_path}:{ent.line_start})" if ent.file_path else ""
+        sig = f" — {ent.signature[:80]}" if ent.signature else ""
+        lines.append(f"[{ent.entity_type.value}] {ent.name}{loc}{sig}")
+    
+    return _truncate_text("\n".join(lines))
+
+
+# --- Tool: semantic search (slower, uses embeddings) ----------------------
 
 
 @mcp.tool()
 def search_code(query: str, top_k: int = 10, max_chars: int = _DEFAULT_TEXT_LIMIT) -> str:
-    """Semantic search over the code knowledge graph.
+    """Semantic search over the code knowledge graph using AI embeddings.
 
     Finds entities (classes, functions, methods, …) whose names, signatures or
     docstrings are most similar to the natural-language *query*.
+
+    NOTE: First call may take 30-60 seconds to load the embedding model.
+    For faster keyword-based search, use search_keywords instead.
 
     Args:
         query: Natural-language description of what you're looking for.
@@ -467,21 +559,63 @@ def graph_stats() -> str:
     for ent in kg.entities:
         key = ent.entity_type.value
         type_counts[key] = type_counts.get(key, 0) + 1
+
+    rel_counts: dict[str, int] = {}
+    for rel in kg.relations:
+        key = rel.relation_type.value if hasattr(rel.relation_type, "value") else str(rel.relation_type)
+        rel_counts[key] = rel_counts.get(key, 0) + 1
+
+    commit_count = type_counts.get(CodeEntityType.COMMIT.value, 0)
+    author_count = type_counts.get(CodeEntityType.AUTHOR.value, 0)
+    work_item_count = type_counts.get(CodeEntityType.WORK_ITEM.value, 0)
+    committed_in_count = rel_counts.get("COMMITTED_IN", 0)
+    modified_by_count = rel_counts.get("MODIFIED_BY", 0)
+    co_changed_count = rel_counts.get("CO_CHANGED", 0)
+    linked_to_count = rel_counts.get("LINKED_TO", 0)
+
+    has_git_history = (
+        (_metadata.has_git_history if _metadata is not None else False)
+        or commit_count > 0
+        or author_count > 0
+        or committed_in_count > 0
+        or modified_by_count > 0
+        or co_changed_count > 0
+    )
+    has_work_items = (
+        (_metadata.has_work_items if _metadata is not None else False)
+        or work_item_count > 0
+        or linked_to_count > 0
+    )
+    git_window = _metadata.git_since if _metadata and _metadata.git_since else ""
+    git_status = "yes"
+    if git_window:
+        git_status += f" (since {git_window})"
+    if not has_git_history:
+        git_status = "no"
+
     lines = [
         f"Active project: {_active_project}",
         f"Total entities: {len(kg.entities)}",
         f"Total relations: {len(kg.relations)}",
+        "",
+        "Historical changes:",
+        f"  Indexed: {git_status}",
+        f"  Commits: {commit_count}",
+        f"  Authors: {author_count}",
+        f"  File change links: {committed_in_count}",
+        f"  Ownership links: {modified_by_count}",
+        f"  Co-change links: {co_changed_count}",
+        "",
+        "Work items:",
+        f"  Indexed: {'yes' if has_work_items else 'no'}",
+        f"  Work item entities: {work_item_count}",
+        f"  Commit links: {linked_to_count}",
         "",
         "Entity types:",
     ]
     for etype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
         lines.append(f"  {etype}: {count}")
 
-    # Count relation types
-    rel_counts: dict[str, int] = {}
-    for r in kg.relations:
-        rt = r.relation_type.value if hasattr(r.relation_type, "value") else str(r.relation_type)
-        rel_counts[rt] = rel_counts.get(rt, 0) + 1
     lines.append("\nRelation types:")
     for rtype, count in sorted(rel_counts.items(), key=lambda x: -x[1]):
         lines.append(f"  {rtype}: {count}")

@@ -8,7 +8,6 @@ from base64 import b64encode
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from kg_rag.config import settings
@@ -45,21 +44,12 @@ class AdoClient:
                 "ADO_ORG and ADO_WI_READ must be set (in .env or environment) "
                 "to use Azure DevOps work item hydration."
             )
-        
-        # Handle full URLs in ADO_ORG (extract just the org name)
-        if self.org.startswith("https://dev.azure.com/"):
-            self.org = self.org.replace("https://dev.azure.com/", "").rstrip("/")
-        elif self.org.startswith("http://dev.azure.com/"):
-            self.org = self.org.replace("http://dev.azure.com/", "").rstrip("/")
-        
         # Basic auth header: base64(":" + PAT)
         token = b64encode(f":{self.pat}".encode()).decode()
         self._auth_header = f"Basic {token}"
-        # Construct base URL with just the org name
         self._base = f"https://dev.azure.com/{self.org}"
         if self.project:
             self._base += f"/{self.project}"
-        logger.debug("ADO API base URL: %s", self._base)
 
     # ------------------------------------------------------------------
     # Low-level HTTP
@@ -100,23 +90,18 @@ class AdoClient:
             batch = ids[i : i + _ADO_BATCH_SIZE]
             id_str = ",".join(str(x) for x in batch)
             fields = "System.Title,System.WorkItemType,System.State,System.Description,System.Tags,System.AreaPath"
-            # Properly encode query parameters
-            params = urlencode({
-                "ids": id_str,
-                "fields": fields,
-                "api-version": "7.1"
-            })
-            url = f"{self._base}/_apis/wit/workitems?{params}"
-            logger.debug("Fetching work items from URL: %s", url)
+            url = (
+                f"{self._base}/_apis/wit/workitems?ids={id_str}"
+                f"&fields={fields}&api-version=7.1"
+            )
             try:
                 data = self._get(url)
             except HTTPError as exc:
                 response_body = exc.read().decode("utf-8", errors="replace")
                 logger.warning(
-                    "ADO API error for batch ids %s: %s. URL: %s Response body: %s",
+                    "ADO API error for batch ids %s: %s. Response body: %s",
                     batch,
                     exc,
-                    url,
                     response_body,
                 )
                 continue
@@ -146,8 +131,6 @@ _CACHE_FILE = "workitems_cache.json"
 
 
 def _cache_path() -> Path:
-    """Return the local path for cached work item data (in cache directory)."""
-    settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
     return settings.DATA_DIR / _CACHE_FILE
 
 

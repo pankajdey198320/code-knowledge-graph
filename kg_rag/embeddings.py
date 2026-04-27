@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import pickle
 import sys
+from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
@@ -60,11 +62,71 @@ class KGEmbedder:
     # Bulk operations
     # ------------------------------------------------------------------
 
-    def embed_graph(self, kg: KnowledgeGraph) -> dict[str, NDArray[np.float32]]:
-        """Embed all entities in a KG. Returns dict keyed by qualified_key."""
+    def embed_graph(
+        self,
+        kg: KnowledgeGraph,
+        skip_entity_types: set[str] | None = None,
+        batch_size: int = 100,
+        show_progress: bool = True,
+    ) -> dict[str, NDArray[np.float32]]:
+        """Embed all entities in a KG. Returns dict keyed by qualified_key.
+        
+        Args:
+            kg: The knowledge graph to embed.
+            skip_entity_types: Entity types to skip (e.g., {'file', 'import', 'variable'}).
+            batch_size: Number of entities to encode at once.
+            show_progress: Whether to show a progress bar.
+        """
+        # Filter entities to embed
+        if skip_entity_types is None:
+            skip_entity_types = {'file', 'import', 'variable'}  # Skip low-value entities by default
+        
+        entities_to_embed = [
+            ent for ent in kg.entities
+            if ent.entity_type.value not in skip_entity_types
+        ]
+        
+        skipped_count = len(kg.entities) - len(entities_to_embed)
+        if skipped_count > 0:
+            print(
+                f"[kg-embedder] Skipping {skipped_count} low-value entities "
+                f"({', '.join(sorted(skip_entity_types))})",
+                file=sys.stderr,
+            )
+        
+        total_batches = (len(entities_to_embed) + batch_size - 1) // batch_size
+        print(f"[kg-embedder] Embedding {len(entities_to_embed)} entities in {total_batches} batches of {batch_size}...", file=sys.stderr)
+        
         entity_embs: dict[str, NDArray[np.float32]] = {}
-        for ent in kg.entities:
-            entity_embs[ent.qualified_key] = self.embed_entity(ent)
+        
+        # Process in batches for efficiency
+        import time
+        start_time = time.time()
+        
+        for batch_idx, i in enumerate(range(0, len(entities_to_embed), batch_size)):
+            batch = entities_to_embed[i:i + batch_size]
+            texts = [self._entity_to_text(ent) for ent in batch]
+            embeddings = self.embed_texts(texts)
+            
+            for ent, emb in zip(batch, embeddings):
+                entity_embs[ent.qualified_key] = emb
+                self._cache[ent.qualified_key] = emb
+            
+            # Progress logging every 10 batches or at specific milestones
+            if show_progress and (batch_idx + 1) % 10 == 0:
+                elapsed = time.time() - start_time
+                progress = (batch_idx + 1) / total_batches * 100
+                entities_done = min((batch_idx + 1) * batch_size, len(entities_to_embed))
+                rate = entities_done / elapsed if elapsed > 0 else 0
+                eta = (len(entities_to_embed) - entities_done) / rate if rate > 0 else 0
+                print(
+                    f"[kg-embedder] Progress: {progress:.1f}% ({entities_done:,}/{len(entities_to_embed):,} entities, "
+                    f"{rate:.0f} entities/sec, ETA: {eta:.0f}s)",
+                    file=sys.stderr,
+                )
+        
+        elapsed = time.time() - start_time
+        print(f"[kg-embedder] Completed embedding {len(entities_to_embed)} entities in {elapsed:.1f}s", file=sys.stderr)
         return entity_embs
 
     # ------------------------------------------------------------------
@@ -94,3 +156,27 @@ class KGEmbedder:
             scored.append((ent, score))
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
+
+    # ------------------------------------------------------------------
+    # Disk caching
+    # ------------------------------------------------------------------
+
+    def save_cache(self, cache_path: Path) -> None:
+        """Persist the embedding cache to disk."""
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "wb") as f:
+            pickle.dump(self._cache, f)
+        print(f"[kg-embedder] Saved {len(self._cache)} embeddings to {cache_path}", file=sys.stderr)
+
+    def load_cache(self, cache_path: Path) -> bool:
+        """Load embedding cache from disk. Returns True if successful."""
+        if not cache_path.exists():
+            return False
+        try:
+            with open(cache_path, "rb") as f:
+                self._cache = pickle.load(f)
+            print(f"[kg-embedder] Loaded {len(self._cache)} embeddings from {cache_path}", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"[kg-embedder] Failed to load cache from {cache_path}: {e}", file=sys.stderr)
+            return False

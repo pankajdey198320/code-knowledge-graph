@@ -44,6 +44,8 @@ _EXTENSION_MAP: dict[str, str] = {
     ".iss": "pascal",
     # NAnt build files
     ".build": "nant",
+    # JSON and JSON Schema
+    ".json": "json",
 }
 
 
@@ -81,6 +83,9 @@ def _get_parser(lang: str) -> BaseCodeParser:
     elif lang == "nant":
         from kg_rag.parsers.nant_parser import NAntParser
         return NAntParser()
+    elif lang == "json":
+        from kg_rag.parsers.json_parser import JSONParser
+        return JSONParser()
     raise ValueError(f"No parser for language: {lang}")
 
 
