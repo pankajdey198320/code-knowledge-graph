@@ -1,0 +1,115 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Package",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "build", "--wheel"],
+      "options": {
+        "cwd": "${workspaceFolder}/py"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      },
+      "group": "build"
+    },
+    {
+      "label": "Install to Mcp venv",
+      "type": "shell",
+      "command": "New-Item",
+      "args": [
+        "-ItemType",
+        "Directory",
+        "-Force",
+        "-Path",
+        "../${input:targetFolder}/python-package-dist",
+        "|",
+        "Out-Null",
+        ";",
+        "Copy-Item",
+        "${workspaceFolder}/py/dist/kg_code_rag-0.1.0-py3-none-any.whl",
+        "../${input:targetFolder}/python-package-dist/",
+        "-Force",
+        ";",
+        "../${input:targetFolder}/.venv/Scripts/pip.exe",
+        "install",
+        "--force-reinstall",
+        "../${input:targetFolder}/python-package-dist/kg_code_rag-0.1.0-py3-none-any.whl"
+      ],
+      "options": {
+        "shell": {
+          "executable": "pwsh.exe",
+          "args": ["-Command"]
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      },
+      "group": "build"
+    },
+    {
+      "label": "Build & Install",
+      "dependsOn": ["Build Package", "Install to Mcp venv"],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Clean Build Artifacts",
+      "type": "shell",
+      "command": "Remove-Item",
+      "args": [
+        "-Path",
+        "build,dist,kg_code_rag.egg-info",
+        "-Recurse",
+        "-Force",
+        "-ErrorAction",
+        "SilentlyContinue"
+      ],
+      "options": {
+        "shell": {
+          "executable": "pwsh.exe",
+          "args": ["-Command"]
+        }
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      },
+      "group": "build"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "targetFolder",
+      "type": "pickString",
+      "description": "Select the workspace folder to install to",
+      "options": [
+        "Mcp",
+        "MCP-v1"
+      ],
+      "default": "Mcp"
+    }
+  ]
+}
