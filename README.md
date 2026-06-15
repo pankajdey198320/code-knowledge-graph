@@ -250,6 +250,8 @@ For a release-ready internal publishing flow, see [docs/private-release-checklis
 | `graph_stats` | Summary statistics of the indexed graph |
 | `reindex_repo` | Re-index the repo and rebuild the graph |
 
+
+
 ## Extending
 
 - **Add languages** — create a new parser in `kg_rag/parsers/`, register its extension in `router.py`.
