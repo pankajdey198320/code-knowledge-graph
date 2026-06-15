@@ -22,7 +22,6 @@ dependencies = [
     # Graph & embeddings
     "networkx>=3.0",
     "numpy>=1.24",
-    "sentence-transformers>=2.2",
     # Code parsing
     "tree-sitter>=0.23",
     "tree-sitter-python>=0.23",

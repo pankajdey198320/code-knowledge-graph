@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/KgCodeRag/KgCodeRag.csproj" />
+  <Project Path="src/KgCodeRag.Mcp/KgCodeRag.Mcp.csproj" />
+  <Project Path="src/KgCodeRag.Cli/KgCodeRag.Cli.csproj" />
+</Solution>

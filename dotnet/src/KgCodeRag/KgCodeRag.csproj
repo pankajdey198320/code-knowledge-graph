@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>KgCodeRag</AssemblyName>
+    <RootNamespace>KgCodeRag</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- C# AST parsing via Roslyn (official, no P/Invoke) -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.*" />
+    <!-- Git history extraction -->
+    <PackageReference Include="LibGit2Sharp" Version="0.30.*" />
+    <!-- Logging abstractions -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.*" />
+  </ItemGroup>
+
+</Project>

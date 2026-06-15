@@ -72,9 +72,19 @@ def main_index() -> None:
         dest="ado",
         help="Disable ADO work item hydration",
     )
+    parser.add_argument(
+        "--preload-embeddings",
+        action="store_true",
+        help="Build and save the embedding cache after indexing so MCP startup can reuse it",
+    )
     args = parser.parse_args()
 
     from kg_rag.indexer import index_repo, list_indexed_projects, save_graph
+    from kg_rag.embeddings import (
+        KGEmbedder,
+        default_embedding_skip_entity_types,
+        embedding_cache_path_for,
+    )
     from kg_rag.projects import ProjectsConfig
 
     cfg = ProjectsConfig.load()
@@ -190,6 +200,23 @@ def main_index() -> None:
     )
 
     out = save_graph(kg, output, metadata=metadata)
+
+    if args.preload_embeddings:
+        embeddings_cache = embedding_cache_path_for(project_name or settings.ACTIVE_PROJECT, out.parent)
+        embedder = KGEmbedder()
+        cache_loaded = embedder.load_cache(embeddings_cache)
+        skip_types = default_embedding_skip_entity_types()
+        if cache_loaded:
+            print(f"Embedding cache loaded from {embeddings_cache} ({embedder.cache_size} entities)")
+
+        print("Pre-computing embeddings for the saved graph ...")
+        embedded = embedder.embed_graph(kg, skip_entity_types=skip_types, batch_size=500, show_progress=True)
+        if embedded or not cache_loaded:
+            embedder.save_cache(embeddings_cache)
+            print(f"Saved embedding cache to {embeddings_cache}")
+        else:
+            print(f"Embedding cache already up to date at {embeddings_cache}")
+
     print(f"\nDone. {len(kg.entities)} entities, {len(kg.relations)} relations")
     print(f"Saved to {out}")
 

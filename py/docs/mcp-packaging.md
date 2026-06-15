@@ -13,6 +13,8 @@ Ship a single reusable Python package:
 - Contents: parser/runtime code only
 - Excluded from packaging decisions: repo-specific scopes, repo roots, user-specific paths
 
+By default the entrypoint runs on stdio. When you need to expose the server over HTTP, use CLI flags such as `--transport sse --host 127.0.0.1 --port 8000` or `--transport streamable-http --host 127.0.0.1 --port 8000`.
+
 That package is then instantiated multiple times by MCP configuration.
 
 ## Deployment shape
@@ -21,6 +23,8 @@ That package is then instantiated multiple times by MCP configuration.
 2. Install it into a shared virtual environment or an internal tool environment.
 3. Define one MCP server per repo or per project scope in `.vscode/mcp.json`, user MCP settings, or host-level MCP configuration.
 4. Pass repo identity and scope through MCP env vars.
+
+The server eagerly loads the graph and embeddings before accepting requests, so first-start latency should be treated as part of deployment readiness.
 
 ## Why this shape is the right one
 

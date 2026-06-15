@@ -1,9 +1,17 @@
 {
 	"folders": [
 		{
+			"name": "KG (root)",
 			"path": "."
 		},
 		{
+			"name": "KG — Python",
+			"path": "py"
+			"name": "KG — .NET",
+			"path": "dotnet"
+		},
+		{
+			"name": "Mcp",
 			"path": "../Mcp"
 		}
 	],

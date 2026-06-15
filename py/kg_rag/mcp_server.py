@@ -1,17 +1,22 @@
 """MCP server exposing the code Knowledge Graph as query tools.
 
 Run with:
-    python -m kg_rag.mcp_server          # stdio transport (for IDE/agent integration)
-    kg-mcp                                # same, via the entry-point
+    python -m kg_rag.mcp_server                                # stdio transport
+    python -m kg_rag.mcp_server --transport sse --port 8000    # HTTP via SSE
+    python -m kg_rag.mcp_server --transport streamable-http    # MCP Streamable HTTP
+    kg-mcp                                                     # same, via the entry-point
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Sequence
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from kg_rag.config import settings
 from kg_rag.indexer import (
@@ -21,11 +26,18 @@ from kg_rag.indexer import (
     load_graph_with_metadata,
     save_graph,
 )
+from kg_rag.embeddings import (
+    KGEmbedder,
+    default_embedding_skip_entity_types,
+    embedding_cache_path_for,
+)
 from kg_rag.models import CodeEntityType, Entity, GraphMetadata, KnowledgeGraph
 from kg_rag.projects import ProjectsConfig
 from kg_rag.retriever import GraphRetriever
 
 logger = logging.getLogger(__name__)
+
+_TRANSPORT_CHOICES = ("stdio", "sse", "streamable-http")
 
 # ======================================================================
 # Singleton graph state for the active MCP project.
@@ -41,6 +53,22 @@ _DEFAULT_LIST_LIMIT = 100
 _DEFAULT_MATCH_LIMIT = 25
 _DEFAULT_RELATION_LIMIT = 50
 _DEFAULT_TEXT_LIMIT = 12000
+
+
+def _transport_security_for_host(host: str) -> TransportSecuritySettings | None:
+    """Mirror FastMCP's default transport-security behavior for a chosen host.
+
+    FastMCP decides whether to enable DNS rebinding protection when the server
+    instance is constructed. This module mutates the host later from CLI args,
+    so we must keep the transport security settings in sync with that host.
+    """
+    if host in ("127.0.0.1", "localhost", "::1"):
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
+            allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+        )
+    return None
 
 
 def _cache_path_for(project: str) -> Path:
@@ -139,7 +167,7 @@ def _summarize_matches(total: int, shown: int, noun: str) -> str:
     return f"Found {total} {noun}; showing first {shown}."
 
 
-def _ensure_retriever() -> GraphRetriever:
+def _ensure_retriever(preload_embeddings: bool = False) -> GraphRetriever:
     """Lazily create the retriever (loads embedding model on first call).
     
     Note: This may take 30-60 seconds on first run to download the model from HuggingFace.
@@ -150,30 +178,28 @@ def _ensure_retriever() -> GraphRetriever:
 
     kg = _load_graph()
     print("[kg-mcp] Loading embedding model (this may take 30-60 seconds on first run)...", file=sys.stderr)
-    from kg_rag.embeddings import KGEmbedder
-
     embedder = KGEmbedder()
     
     # Try to load cached embeddings
-    cache_dir = _cache_path_for(_active_project).parent
-    embeddings_cache = cache_dir / f"{_active_project}_embeddings.pkl"
+    embeddings_cache = embedding_cache_path_for(_active_project, _cache_path_for(_active_project).parent)
     
     cache_loaded = embedder.load_cache(embeddings_cache)
     
-    # Pre-compute embeddings if not cached or if explicitly requested
+    # Pre-compute embeddings if requested or if explicitly enabled via env
     import os
-    if os.getenv("KG_PRELOAD_EMBEDDINGS", "").strip().lower() in ("1", "true", "yes"):
+    should_preload = preload_embeddings or os.getenv("KG_PRELOAD_EMBEDDINGS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if should_preload:
         if cache_loaded:
-            print(f"[kg-mcp] Embeddings cache loaded from disk ({len(embedder._cache)} entities).", file=sys.stderr)
+            print(f"[kg-mcp] Embeddings cache loaded from disk ({embedder.cache_size} entities).", file=sys.stderr)
         else:
             # Determine which entity types to skip
             # Use aggressive filtering for huge codebases (skip methods too, keep only classes/functions)
-            if os.getenv("KG_AGGRESSIVE_EMBEDDING", "").strip().lower() in ("1", "true", "yes"):
-                skip_types = {'file', 'import', 'variable', 'method', 'property', 'field', 'enum', 'struct'}
-                filtering_mode = "aggressive (classes/functions/namespaces only)"
-            else:
-                skip_types = {'file', 'import', 'variable'}
-                filtering_mode = "standard"
+            skip_types = default_embedding_skip_entity_types()
+            filtering_mode = "aggressive (classes/functions/namespaces only)" if len(skip_types) > 3 else "standard"
             
             # Count entities that will be embedded
             embed_count = sum(1 for e in kg.entities if e.entity_type.value not in skip_types)
@@ -194,6 +220,72 @@ def _ensure_retriever() -> GraphRetriever:
     _embedder_loaded = True
     print("[kg-mcp] Embedder ready. Semantic search is now available.", file=sys.stderr)
     return _retriever
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the KG MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=_TRANSPORT_CHOICES,
+        default="stdio",
+        help="Transport to expose: stdio, sse, or streamable-http",
+    )
+    parser.add_argument(
+        "--host",
+        default=mcp.settings.host,
+        help="Host interface for HTTP transports",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=mcp.settings.port,
+        help="Port for HTTP transports",
+    )
+    parser.add_argument(
+        "--mount-path",
+        default=mcp.settings.mount_path,
+        help="Mount path used by SSE transport",
+    )
+    parser.add_argument(
+        "--sse-path",
+        default=mcp.settings.sse_path,
+        help="SSE endpoint path for SSE transport",
+    )
+    parser.add_argument(
+        "--message-path",
+        default=mcp.settings.message_path,
+        help="Message endpoint path for SSE transport",
+    )
+    parser.add_argument(
+        "--streamable-http-path",
+        default=mcp.settings.streamable_http_path,
+        help="Endpoint path for streamable HTTP transport",
+    )
+    return parser
+
+
+def _configure_mcp_transport(args: argparse.Namespace) -> None:
+    mcp.settings.host = args.host
+    mcp.settings.port = args.port
+    mcp.settings.mount_path = args.mount_path
+    mcp.settings.sse_path = args.sse_path
+    mcp.settings.message_path = args.message_path
+    mcp.settings.streamable_http_path = args.streamable_http_path
+    mcp.settings.transport_security = _transport_security_for_host(args.host)
+
+
+def _initialize_server_state() -> None:
+    print("[kg-mcp] Starting server, loading graph...", file=sys.stderr)
+    _load_graph()
+    print("[kg-mcp] Loading embedding model...", file=sys.stderr)
+    _ensure_retriever(preload_embeddings=True)
+    print("[kg-mcp] Server state ready.", file=sys.stderr)
+
+
+def _join_http_path(base_path: str, endpoint_path: str) -> str:
+    if base_path == "/":
+        return endpoint_path
+    return f"{base_path.rstrip('/')}{endpoint_path}"
 
 
 def _get_kg() -> KnowledgeGraph:
@@ -1199,29 +1291,131 @@ def blame_context(file_path: str) -> str:
 
 
 # ======================================================================
+# Resources  –  project documentation
+# ======================================================================
+
+@mcp.resource(
+    "kg://docs/",
+    name="docs-index",
+    title="Project documentation index",
+    description=(
+        "Lists all documentation files registered for every project. "
+        "Access individual docs at kg://docs/{project}/{category}."
+    ),
+    mime_type="text/plain",
+)
+def list_project_docs() -> str:
+    """Return a directory of every registered doc file across all projects."""
+    cfg = _projects_cfg
+    if not cfg.projects:
+        return "No projects configured. Add 'docs_dir' or 'docs' to your projects.json."
+
+    repo_root = cfg.get_repo_root()
+    lines: list[str] = ["Available project documentation resources:", ""]
+    any_docs = False
+    for proj_name, scope in cfg.projects.items():
+        resolved = scope.resolve_docs(repo_root)
+        if not resolved:
+            continue
+        any_docs = True
+        lines.append(f"Project: {proj_name}")
+        if scope.description:
+            lines.append(f"  {scope.description}")
+        for category, path in resolved.items():
+            lines.append(f"  kg://docs/{proj_name}/{category}  →  {path}")
+        lines.append("")
+
+    if not any_docs:
+        return (
+            "No documentation paths are configured yet. "
+            "Add 'docs_dir' (a folder) or 'docs' (explicit map) to each project in projects.json, e.g.:\n"
+            '  "docs_dir": "docs/Calculation"'
+        )
+    return "\n".join(lines)
+
+
+@mcp.resource(
+    "kg://docs/{project}/{category}",
+    name="project-doc",
+    title="Project documentation",
+    description=(
+        "Returns the full content of a registered documentation file for a project. "
+        "Use kg://docs/ to discover available projects and categories."
+    ),
+    mime_type="text/plain",
+)
+def get_project_doc(project: str, category: str) -> str:
+    """Read and return a project documentation file.
+
+    Args:
+        project: Project name as defined in projects.json (e.g. 'Calculation', 'Upgrader').
+        category: Documentation category derived from filename (e.g. 'theory', 'user-manual').
+    """
+    cfg = _projects_cfg
+    scope = cfg.projects.get(project)
+    if scope is None:
+        available = ", ".join(cfg.projects.keys()) or "(none)"
+        return f"Unknown project '{project}'. Available projects: {available}"
+
+    resolved = scope.resolve_docs(cfg.get_repo_root())
+    if not resolved:
+        return (
+            f"Project '{project}' has no documentation configured. "
+            "Add 'docs_dir' or 'docs' to its entry in projects.json."
+        )
+
+    doc_path = resolved.get(category)
+    if doc_path is None:
+        available_cats = ", ".join(resolved.keys())
+        return f"Unknown category '{category}' for project '{project}'. Available: {available_cats}"
+
+    if not doc_path.exists():
+        return f"Documentation file not found: {doc_path}"
+
+    try:
+        content = doc_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"Could not read documentation file '{doc_path}': {exc}"
+
+    header = f"# {project} — {category}\n# Source: {doc_path}\n\n"
+    return header + content
+
+
+# ======================================================================
 # Entry-point
 # ======================================================================
 
 
-def main() -> None:
-    """Run the MCP server on stdio transport."""
-    # Eagerly load the graph at startup (instead of waiting for first tool call)
-    print("[kg-mcp] Starting server, loading graph...", file=sys.stderr)
-    _load_graph()
-    print("[kg-mcp] Server ready.", file=sys.stderr)
-    
-    # Optionally pre-load embeddings at startup (default: lazy load on first search)
-    # Set KG_PRELOAD_EMBEDDINGS=1 to download/load the model at startup
-    import os
-    if os.getenv("KG_PRELOAD_EMBEDDINGS", "").strip() in ("1", "true", "yes"):
-        print("[kg-mcp] Pre-loading embedding model (this may take 30-60 seconds)...", file=sys.stderr)
-        try:
-            _ensure_retriever()
-            print("[kg-mcp] Embedding model pre-loaded.", file=sys.stderr)
-        except Exception as e:
-            print(f"[kg-mcp] Warning: Failed to pre-load embeddings: {e}", file=sys.stderr)
-    
-    mcp.run(transport="stdio")
+def main(argv: Sequence[str] | None = None) -> None:
+    """Run the MCP server with the selected transport."""
+    parser = _build_parser()
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    _configure_mcp_transport(args)
+    _initialize_server_state()
+
+    if args.transport == "stdio":
+        print("[kg-mcp] Server ready on stdio transport.", file=sys.stderr)
+        mcp.run(transport="stdio")
+        return
+
+    if args.transport == "sse":
+        sse_url = _join_http_path(args.mount_path, args.sse_path)
+        message_url = _join_http_path(args.mount_path, args.message_path)
+        print(
+            f"[kg-mcp] Server ready on SSE transport: GET http://{args.host}:{args.port}{sse_url} | "
+            f"POST http://{args.host}:{args.port}{message_url}",
+            file=sys.stderr,
+        )
+        mcp.run(transport="sse", mount_path=args.mount_path)
+        return
+
+    print(
+        "[kg-mcp] Server ready on Streamable HTTP transport: "
+        f"http://{args.host}:{args.port}{args.streamable_http_path}",
+        file=sys.stderr,
+    )
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,53 @@ class ProjectScope(BaseModel):
 
     description: str = ""
     paths: list[str] = Field(default_factory=lambda: ["."])
+    docs_dir: str = Field(
+        default="",
+        description=(
+            "Folder containing documentation files (absolute or relative to repo_root). "
+            "All *.md files are discovered recursively and exposed as MCP resources. "
+            "Category names are derived from the relative file path (e.g. theory/overview.md → theory-overview)."
+        ),
+    )
+    docs: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional explicit category → file path mapping. "
+            "Values are absolute paths or relative to repo_root. "
+            "These override any auto-discovered file with the same category name."
+        ),
+    )
+
+    def resolve_docs(self, repo_root: Path) -> dict[str, Path]:
+        """Return a merged {category: absolute_path} dict for all docs.
+
+        Auto-discovers every *.md file under docs_dir (recursively), then
+        merges in the explicit docs entries (which take precedence).
+        Category names for auto-discovered files are the relative path from
+        docs_dir with directory separators replaced by '-' and .md stripped.
+        """
+        result: dict[str, Path] = {}
+
+        # 1. Auto-discover from docs_dir
+        if self.docs_dir:
+            base = Path(self.docs_dir)
+            if not base.is_absolute():
+                base = (repo_root / base).resolve()
+            if base.is_dir():
+                for md_file in sorted(base.rglob("*.md")):
+                    rel = md_file.relative_to(base)
+                    # e.g. theory/overview.md → "theory-overview"
+                    category = "-".join(rel.with_suffix("").parts)
+                    result[category] = md_file
+
+        # 2. Explicit entries override / extend
+        for category, raw_path in self.docs.items():
+            p = Path(raw_path)
+            if not p.is_absolute():
+                p = (repo_root / p).resolve()
+            result[category] = p
+
+        return result
 
 
 class ProjectsConfig(BaseModel):

@@ -1,21 +1,39 @@
+# ─── Python (py/) ──────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.egg-info/
-dist/
-build/
-.env
-.venv/
+py/dist/
+py/build/
+py/.env
+py/.venv/
+py/models/
+py/Neo4_data/
+py/data/workitems_cache.json
+py/projects.json
+py/_debug_*.py
+py/_explore_*.py
+py/_test_*.py
+py/.mypy_cache/
+py/.ruff_cache/
+py/.pytest_cache/
+
+# ─── .NET (dotnet/) ─────────────────────────────────────────────────────────
+# (also covered by dotnet/.gitignore)
+dotnet/**/bin/
+dotnet/**/obj/
+dotnet/artifacts/
+dotnet/publish/
+dotnet/*.user
+
+# ─── Editor / OS ────────────────────────────────────────────────────────────
 .vscode/
+.vs/
+.idea/
 *.db
-*.pkl
-projects.json
-data/workitems_cache.json
-_debug_*.py
-_explore_*.py
-_test_*.py
-models/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
-Neo4_data/
-test_callgraph.py
+*.log
+*.tmp
+.venv/*
+.venv/**/*
+Neo4_data/**/*
+py/data/**/*
+build/lib/**/*

@@ -2,34 +2,52 @@
 
 from __future__ import annotations
 
+import os
 import pickle
 import sys
 from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 
 from kg_rag.config import settings
 from kg_rag.models import Entity, KnowledgeGraph
 
 
+def embedding_cache_path_for(project_name: str, cache_root: Path | None = None) -> Path:
+    """Return the embedding cache path for a project name."""
+    root = cache_root or settings.DATA_DIR
+    return root / f"{project_name}_embeddings.pkl"
+
+
+def default_embedding_skip_entity_types() -> set[str]:
+    """Return the default entity types to exclude from embedding."""
+    if os.getenv("KG_AGGRESSIVE_EMBEDDING", "").strip().lower() in ("1", "true", "yes"):
+        return {"file", "import", "variable", "method", "property", "field", "enum", "struct"}
+    return {"file", "import", "variable"}
+
+
 class KGEmbedder:
-    """Wraps a sentence-transformer to embed code KG elements."""
+    """Wraps an Ollama embedding client to embed code KG elements."""
 
     def __init__(self, model_name: str | None = None) -> None:
         model_name = model_name or settings.EMBEDDING_MODEL
-        # Prefer local copy under models/ for faster startup
-        local_path = settings.MODELS_DIR / model_name
-        if local_path.exists():
-            model_name = str(local_path)
-            print(f"[kg-embedder] Loading local model from {local_path}", file=sys.stderr)
-        else:
-            print(f"[kg-embedder] Downloading model '{model_name}' from HuggingFace (this may take a while)...", file=sys.stderr)
-        
-        self.model = SentenceTransformer(model_name)
-        print("[kg-embedder] Model loaded successfully", file=sys.stderr)
+        self.model_name = model_name
+        self.client = OpenAI(
+            base_url=settings.OLLAMA_BASE_URL,
+            api_key=settings.OLLAMA_API_KEY or os.getenv("OLLAMA_API_KEY", "ollama"),
+        )
+        print(
+            f"[kg-embedder] Using Ollama embeddings model '{self.model_name}' at {settings.OLLAMA_BASE_URL}",
+            file=sys.stderr,
+        )
         self._cache: dict[str, NDArray[np.float32]] = {}
+
+    @property
+    def cache_size(self) -> int:
+        """Return the number of cached embeddings currently held in memory."""
+        return len(self._cache)
 
     # ------------------------------------------------------------------
     # Core embedding
@@ -37,7 +55,15 @@ class KGEmbedder:
 
     def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
         """Embed a list of plain-text strings."""
-        return self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+        if not texts:
+            return np.empty((0, 0), dtype=np.float32)
+
+        response = self.client.embeddings.create(
+            model=self.model_name,
+            input=texts,
+        )
+        embeddings = [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
+        return np.asarray(embeddings, dtype=np.float32)
 
     def embed_entity(self, entity: Entity) -> NDArray[np.float32]:
         key = entity.qualified_key
@@ -77,41 +103,63 @@ class KGEmbedder:
             batch_size: Number of entities to encode at once.
             show_progress: Whether to show a progress bar.
         """
-        # Filter entities to embed
         if skip_entity_types is None:
-            skip_entity_types = {'file', 'import', 'variable'}  # Skip low-value entities by default
-        
-        entities_to_embed = [
-            ent for ent in kg.entities
-            if ent.entity_type.value not in skip_entity_types
-        ]
-        
-        skipped_count = len(kg.entities) - len(entities_to_embed)
+            skip_entity_types = default_embedding_skip_entity_types()
+
+        entities_to_embed: list[Entity] = []
+        eligible_count = 0
+        cached_count = 0
+        for ent in kg.entities:
+            if ent.entity_type.value in skip_entity_types:
+                continue
+            eligible_count += 1
+            if ent.qualified_key in self._cache:
+                cached_count += 1
+                continue
+            entities_to_embed.append(ent)
+
+        skipped_count = len(kg.entities) - eligible_count
         if skipped_count > 0:
             print(
                 f"[kg-embedder] Skipping {skipped_count} low-value entities "
                 f"({', '.join(sorted(skip_entity_types))})",
                 file=sys.stderr,
             )
-        
+
+        if cached_count > 0:
+            print(
+                f"[kg-embedder] Reusing {cached_count} cached embeddings for model '{self.model_name}'.",
+                file=sys.stderr,
+            )
+
+        if not entities_to_embed:
+            print(
+                f"[kg-embedder] All eligible embeddings already cached for model '{self.model_name}'.",
+                file=sys.stderr,
+            )
+            return {}
+
         total_batches = (len(entities_to_embed) + batch_size - 1) // batch_size
-        print(f"[kg-embedder] Embedding {len(entities_to_embed)} entities in {total_batches} batches of {batch_size}...", file=sys.stderr)
-        
+        print(
+            f"[kg-embedder] Embedding {len(entities_to_embed)} entities in {total_batches} batches of {batch_size}...",
+            file=sys.stderr,
+        )
+
         entity_embs: dict[str, NDArray[np.float32]] = {}
-        
+
         # Process in batches for efficiency
         import time
         start_time = time.time()
-        
+
         for batch_idx, i in enumerate(range(0, len(entities_to_embed), batch_size)):
             batch = entities_to_embed[i:i + batch_size]
             texts = [self._entity_to_text(ent) for ent in batch]
             embeddings = self.embed_texts(texts)
-            
+
             for ent, emb in zip(batch, embeddings):
                 entity_embs[ent.qualified_key] = emb
                 self._cache[ent.qualified_key] = emb
-            
+
             # Progress logging every 10 batches or at specific milestones
             if show_progress and (batch_idx + 1) % 10 == 0:
                 elapsed = time.time() - start_time
@@ -165,8 +213,18 @@ class KGEmbedder:
         """Persist the embedding cache to disk."""
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cache_path, "wb") as f:
-            pickle.dump(self._cache, f)
-        print(f"[kg-embedder] Saved {len(self._cache)} embeddings to {cache_path}", file=sys.stderr)
+            pickle.dump(
+                {
+                    "format_version": 2,
+                    "model_name": self.model_name,
+                    "embeddings": self._cache,
+                },
+                f,
+            )
+        print(
+            f"[kg-embedder] Saved {len(self._cache)} embeddings for model '{self.model_name}' to {cache_path}",
+            file=sys.stderr,
+        )
 
     def load_cache(self, cache_path: Path) -> bool:
         """Load embedding cache from disk. Returns True if successful."""
@@ -174,8 +232,34 @@ class KGEmbedder:
             return False
         try:
             with open(cache_path, "rb") as f:
-                self._cache = pickle.load(f)
-            print(f"[kg-embedder] Loaded {len(self._cache)} embeddings from {cache_path}", file=sys.stderr)
+                payload = pickle.load(f)
+
+            if not isinstance(payload, dict) or payload.get("format_version") != 2:
+                print(
+                    f"[kg-embedder] Ignoring legacy embedding cache at {cache_path}; it will be rebuilt for Ollama.",
+                    file=sys.stderr,
+                )
+                return False
+
+            cached_model = payload.get("model_name")
+            if cached_model != self.model_name:
+                print(
+                    f"[kg-embedder] Ignoring embedding cache for model '{cached_model}' at {cache_path}; "
+                    f"expected '{self.model_name}'.",
+                    file=sys.stderr,
+                )
+                return False
+
+            embeddings = payload.get("embeddings")
+            if not isinstance(embeddings, dict):
+                print(f"[kg-embedder] Invalid embedding cache at {cache_path}; rebuilding.", file=sys.stderr)
+                return False
+
+            self._cache = embeddings
+            print(
+                f"[kg-embedder] Loaded {len(self._cache)} embeddings for model '{self.model_name}' from {cache_path}",
+                file=sys.stderr,
+            )
             return True
         except Exception as e:
             print(f"[kg-embedder] Failed to load cache from {cache_path}: {e}", file=sys.stderr)

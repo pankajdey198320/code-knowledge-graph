@@ -1,0 +1,19 @@
+# Build outputs
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+publish/
+artifacts/
+*.user
+*.suo
+
+# VS / Rider
+.vs/
+.idea/
+
+# Logs / temp
+*.log
+*.tmp
+
+# Embedding caches (machine-specific, can be huge)
+*.embeddings.*.json

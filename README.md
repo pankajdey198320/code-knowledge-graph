@@ -1,32 +1,44 @@
-# Code Knowledge Graph + MCP Query Tool
+# Code Knowledge Graph (KG)
 
-Build a **knowledge graph from source code** (Python, C++, C#) in a mono-repo, then query it via an **MCP server** that any LLM agent can call.
+Build a **knowledge graph from source code** and query it via an **MCP server** that any LLM agent can call.
 
-## Architecture
+## Repository layout
 
 ```
-Mono-repo                            MCP Server
-   │                                    │
-   ├─ .py files ──► PythonParser ─┐     ├─ search_code       (semantic search)
-   ├─ .cpp/.h   ──► CppParser    ├──►  KG  ├─ lookup_symbol      (name search)
-   └─ .cs files ──► CSharpParser ─┘  (entities   ├─ file_overview       (per-file)
-                                    + relations)  ├─ list_classes        (filter)
-   Sentence-Transformer embeddings ◄───┘          ├─ list_functions      (filter)
-                                                  ├─ call_graph          (who calls what)
-   Query ──► Embed ──► Top-K entities             ├─ inheritance_tree    (class hierarchy)
-                  └──► Subgraph traversal         ├─ graph_stats         (summary)
-                       └──► Context for LLM       └─ reindex_repo        (rebuild)
+KG/
+├── py/          Python implementation (FastMCP, sentence-transformers, networkx)
+│   ├── kg_rag/           core library
+│   ├── examples/         usage demos
+│   ├── docs/             design docs
+│   └── pyproject.toml    package definition
+└── dotnet/      C# implementation (.NET 8, Roslyn, Ollama)
+    ├── src/
+    │   ├── KgCodeRag/          core library (parsers, graph, embeddings)
+    │   ├── KgCodeRag.Mcp/      MCP server (stdio + HTTP transports)
+    │   └── KgCodeRag.Cli/      indexer CLI  (kg-index)
+    └── KgCodeRag.slnx          solution file
 ```
 
-### Entity types
+## Quick start — Python
 
-`file` · `module` · `namespace` · `class` · `struct` · `interface` · `enum` · `function` · `method` · `property` · `import` · `package`
+```bash
+cd py
+pip install -e .
+kg-index --repo <path> --project myproject
+kg-mcp --transport stdio
+```
 
-### Relation types
+## Quick start — .NET
 
-`DEFINES` · `CONTAINS` · `CALLS` · `IMPORTS` · `INHERITS` · `IMPLEMENTS` · `USES_TYPE` · `OVERRIDES` · `DEPENDS_ON` · `BELONGS_TO`
+```powershell
+cd dotnet
+dotnet build KgCodeRag.slnx
+dotnet run --project src/KgCodeRag.Mcp -- --transport stdio
+```
 
-## Project Structure
+## MCP tools (both implementations expose the same 22 tools)
+
+`search_code` · `search_keywords` · `lookup_symbol` · `file_overview` · `list_classes` · `list_functions` · `call_graph` · `inheritance_tree` · `graph_stats` · `reindex_repo` · `list_projects` · `switch_project` · `index_project` · `get_project_metadata` · `get_indexed_project_info` · `code_ownership` · `change_coupling` · `hot_spots` · `work_items_for_code` · `code_for_work_item` · `work_item_details` · `blame_context`
 
 ```
 KG/
@@ -79,6 +91,7 @@ copy .env.example .env
 ```
 
 Make sure Ollama is running with a model pulled:
+
 ```bash
 ollama pull llama3
 ollama serve
@@ -105,11 +118,22 @@ python examples/demo_offline.py
 ### 5. Start the MCP server
 
 ```bash
-# stdio transport (for agent/IDE integration)
+# stdio transport (default; for agent/IDE integration)
 kg-mcp
 # or
 python -m kg_rag.mcp_server
+
+# HTTP via SSE transport
+python -m kg_rag.mcp_server --transport sse --host 127.0.0.1 --port 8000
+# then connect to GET http://127.0.0.1:8000/sse and POST http://127.0.0.1:8000/messages/
+
+# HTTP via Streamable MCP transport
+python -m kg_rag.mcp_server --transport streamable-http --host 127.0.0.1 --port 8000
+# then connect to http://127.0.0.1:8000/mcp
 ```
+
+The server now eagerly loads both the graph and embeddings before it reports ready. Expect a slower startup on first run, especially if embeddings need to be computed and cached.
+If you browse to `http://127.0.0.1:8000/`, a `404 Not Found` is expected because the MCP endpoints are mounted under `/sse`, `/messages/`, or `/mcp`, not at the site root.
 
 ## Using with VS Code / Copilot
 
@@ -145,6 +169,18 @@ Add to your MCP settings (`.vscode/mcp.json` or user settings):
   }
 }
 ```
+
+If you want to expose the same packaged server over HTTP outside an MCP host that manages stdio, pass transport flags directly:
+
+```bash
+kg-mcp --transport sse --host 127.0.0.1 --port 8000
+kg-mcp --transport streamable-http --host 127.0.0.1 --port 8000
+```
+
+Use these endpoints after startup:
+
+- SSE transport: `GET /sse` and `POST /messages/`
+- Streamable HTTP transport: `POST /mcp` with the MCP client transport
 
 For a multi-project server, prefer pointing MCP at a config file rather than embedding a large JSON string in the settings:
 

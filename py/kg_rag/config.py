@@ -15,11 +15,12 @@ class Settings:
 
     # Ollama (OpenAI-compatible local LLM)
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    OLLAMA_API_KEY: str = os.getenv("OLLAMA_API_KEY", "ollama")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "llama3")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.0"))
 
-    # Embedding (local path under models/ or HuggingFace model name)
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    # Embedding (Ollama embedding model name)
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
     MODELS_DIR: Path = Path(__file__).resolve().parent.parent / "models"
 
     # Neo4j
