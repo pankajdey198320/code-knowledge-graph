@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
+from typing import Callable, Optional
 from openai import OpenAI
 
 from kg_rag.config import settings
@@ -18,7 +19,9 @@ from kg_rag.models import Entity, KnowledgeGraph
 def embedding_cache_path_for(project_name: str, cache_root: Path | None = None) -> Path:
     """Return the embedding cache path for a project name."""
     root = cache_root or settings.DATA_DIR
-    return root / f"{project_name}_embeddings.pkl"
+    path = root / f"{project_name}_embeddings.pkl"
+    print(f"[kg-embedder] Embedding cache path for project '{project_name}': {path}", file=sys.stderr)
+    return path
 
 
 def default_embedding_skip_entity_types() -> set[str]:
@@ -31,9 +34,27 @@ def default_embedding_skip_entity_types() -> set[str]:
 class KGEmbedder:
     """Wraps an Ollama embedding client to embed code KG elements."""
 
-    def __init__(self, model_name: str | None = None) -> None:
+    def __init__(
+        self,
+        model_name: str | None = None,
+        embed_fn: Optional[Callable[[list[str]], NDArray[np.float32]]] = None,
+    ) -> None:
+        """Create an embedder.
+
+        Args:
+            model_name: The default model name used for the integrated Ollama/OpenAI client.
+            embed_fn: Optional callable that accepts a list of strings and returns
+                a numpy array (shape: [N, D], dtype: np.float32) of embeddings. When
+                provided, `embed_texts` will call this function instead of the
+                configured Ollama client — useful when you want to compute query
+                embeddings locally or with a different provider.
+        """
         model_name = model_name or settings.EMBEDDING_MODEL
         self.model_name = model_name
+        # Optional user-supplied embed function takes precedence over the client.
+        self._embed_fn = embed_fn
+
+        # Create the default OpenAI client (used when no embed_fn is provided).
         self.client = OpenAI(
             base_url=settings.OLLAMA_BASE_URL,
             api_key=settings.OLLAMA_API_KEY or os.getenv("OLLAMA_API_KEY", "ollama"),
@@ -43,6 +64,10 @@ class KGEmbedder:
             file=sys.stderr,
         )
         self._cache: dict[str, NDArray[np.float32]] = {}
+        # Keep search aligned with the entity types embedded by default. Without
+        # this, preload skips low-value entities but the first search embeds them
+        # again on demand.
+        self._skip_entity_types = default_embedding_skip_entity_types()
 
     @property
     def cache_size(self) -> int:
@@ -58,6 +83,13 @@ class KGEmbedder:
         if not texts:
             return np.empty((0, 0), dtype=np.float32)
 
+        # If caller supplied a custom embed function, use it. This avoids any
+        # calls to the Ollama/OpenAI client and lets users compute embeddings
+        # with a local model or a different provider.
+        if getattr(self, "_embed_fn", None) is not None:
+            emb = self._embed_fn(texts)
+            return np.asarray(emb, dtype=np.float32)
+
         response = self.client.embeddings.create(
             model=self.model_name,
             input=texts,
@@ -65,12 +97,45 @@ class KGEmbedder:
         embeddings = [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
         return np.asarray(embeddings, dtype=np.float32)
 
+    def set_embed_fn(self, embed_fn: Optional[Callable[[list[str]], NDArray[np.float32]]]) -> None:
+        """Set or clear a custom embed function at runtime.
+
+        Example:
+            embedder.set_embed_fn(lambda texts: my_local_model.encode(texts))
+        """
+        self._embed_fn = embed_fn
+
     def embed_entity(self, entity: Entity) -> NDArray[np.float32]:
         key = entity.qualified_key
         if key not in self._cache:
             text = self._entity_to_text(entity)
             self._cache[key] = self.embed_texts([text])[0]
         return self._cache[key]
+
+    def _ensure_cached_embeddings(
+        self,
+        entities: list[Entity],
+        batch_size: int = 100,
+    ) -> None:
+        """Embed uncached entities in batches before similarity scoring.
+
+        Search can run before the optional preload step.  Calling
+        ``embed_entity`` from the scoring loop would then invoke the embedding
+        provider once per entity, which is extremely slow for large graphs and
+        looks like a stalled search.  Keep the cache behavior, but fill it with
+        batched requests first.
+        """
+        missing = [entity for entity in entities if entity.qualified_key not in self._cache]
+        for start in range(0, len(missing), batch_size):
+            batch = missing[start:start + batch_size]
+            embeddings = self.embed_texts([self._entity_to_text(entity) for entity in batch])
+            if len(embeddings) != len(batch):
+                raise ValueError(
+                    "Embedding provider returned an unexpected number of vectors: "
+                    f"expected {len(batch)}, got {len(embeddings)}."
+                )
+            for entity, embedding in zip(batch, embeddings):
+                self._cache[entity.qualified_key] = embedding
 
     @staticmethod
     def _entity_to_text(entity: Entity) -> str:
@@ -105,6 +170,7 @@ class KGEmbedder:
         """
         if skip_entity_types is None:
             skip_entity_types = default_embedding_skip_entity_types()
+        self._skip_entity_types = skip_entity_types
 
         entities_to_embed: list[Entity] = []
         eligible_count = 0
@@ -183,6 +249,16 @@ class KGEmbedder:
 
     @staticmethod
     def cosine_similarity(a: NDArray[np.float32], b: NDArray[np.float32]) -> float:
+        if a.ndim != 1 or b.ndim != 1:
+            raise ValueError(
+                f"Embedding vectors must be 1-D; got shapes {a.shape} and {b.shape}."
+            )
+        if a.shape[0] != b.shape[0]:
+            raise ValueError(
+                "Query and entity embeddings must have the same dimension; "
+                f"got {a.shape[0]} and {b.shape[0]}. Use the same embedding model "
+                "for graph and query embeddings, then rebuild the embedding cache."
+            )
         norm_a = np.linalg.norm(a)
         norm_b = np.linalg.norm(b)
         if norm_a == 0 or norm_b == 0:
@@ -197,10 +273,48 @@ class KGEmbedder:
     ) -> list[tuple[Entity, float]]:
         """Return the top-k most similar entities to *query*."""
         query_emb = self.embed_texts([query])[0]
+        searchable_entities = [
+            ent for ent in kg.entities
+            if ent.entity_type.value not in self._skip_entity_types
+        ]
+        self._ensure_cached_embeddings(searchable_entities)
         scored: list[tuple[Entity, float]] = []
-        for ent in kg.entities:
-            ent_emb = self.embed_entity(ent)
+        for ent in searchable_entities:
+            ent_emb = self._cache[ent.qualified_key]
             score = self.cosine_similarity(query_emb, ent_emb)
+            scored.append((ent, score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:top_k]
+
+    def find_similar_entities_from_embedding(
+        self,
+        query_emb: NDArray[np.float32],
+        kg: KnowledgeGraph,
+        top_k: int = 5,
+    ) -> list[tuple[Entity, float]]:
+        """Return the top-k most similar entities to a precomputed query embedding.
+
+        This lets callers avoid calling the embedding provider (e.g., Ollama) from
+        inside this class. For example, compute `query_emb` using another
+        embedding library or a local model, then call::
+
+            results = embedder.find_similar_entities_from_embedding(query_emb, kg, top_k=5)
+
+        where `query_emb` is a 1-D numpy array of dtype `np.float32`.
+        """
+        if query_emb is None:
+            return []
+        # Ensure numpy array and dtype
+        q = np.asarray(query_emb, dtype=np.float32)
+        searchable_entities = [
+            ent for ent in kg.entities
+            if ent.entity_type.value not in self._skip_entity_types
+        ]
+        self._ensure_cached_embeddings(searchable_entities)
+        scored: list[tuple[Entity, float]] = []
+        for ent in searchable_entities:
+            ent_emb = self._cache[ent.qualified_key]
+            score = self.cosine_similarity(q, ent_emb)
             scored.append((ent, score))
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]

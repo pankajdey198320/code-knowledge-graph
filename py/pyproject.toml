@@ -7,7 +7,7 @@ include = ["kg_rag*"]
 
 [project]
 name = "kg-code-rag"
-version = "0.1.0"
+version = "0.1.8"
 description = "Source-code Knowledge Graph + MCP query tool for mono-repos"
 readme = "README.md"
 requires-python = ">=3.10"

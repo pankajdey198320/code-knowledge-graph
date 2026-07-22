@@ -4,7 +4,7 @@
     {
       "label": "Build Package",
       "type": "shell",
-      "command": "python",
+      "command": "py",
       "args": ["-m", "build", "--wheel"],
       "options": {
         "cwd": "${workspaceFolder}/py"
@@ -29,23 +29,23 @@
         "Directory",
         "-Force",
         "-Path",
-        "../${input:targetFolder}/python-package-dist",
+        "C:\\Public\\Deployment\\MCP_server\\KG\\python-package-dist",
         "|",
         "Out-Null",
         ";",
         "Copy-Item",
-        "${workspaceFolder}/py/dist/kg_code_rag-0.1.0-py3-none-any.whl",
-        "../${input:targetFolder}/python-package-dist/",
+        "${workspaceFolder}/py/dist/kg_code_rag-0.1.8-py3-none-any.whl",
+        "C:\\Public\\Deployment\\MCP_server\\KG\\python-package-dist\\",
         "-Force",
         ";",
-        "../${input:targetFolder}/.venv/Scripts/pip.exe",
+        "C:\\Public\\Deployment\\MCP_server\\KG\\.kgh\\Scripts\\pip.exe",
         "install",
         "--force-reinstall",
-        "../${input:targetFolder}/python-package-dist/kg_code_rag-0.1.0-py3-none-any.whl"
+        "C:\\Public\\Deployment\\MCP_server\\KG\\python-package-dist\\kg_code_rag-0.1.8-py3-none-any.whl"
       ],
       "options": {
         "shell": {
-          "executable": "pwsh.exe",
+          "executable": "powershell.exe",
           "args": ["-Command"]
         }
       },
@@ -84,7 +84,7 @@
       ],
       "options": {
         "shell": {
-          "executable": "pwsh.exe",
+          "executable": "powershell.exe",
           "args": ["-Command"]
         }
       },
@@ -98,18 +98,6 @@
         "clear": false
       },
       "group": "build"
-    }
-  ],
-  "inputs": [
-    {
-      "id": "targetFolder",
-      "type": "pickString",
-      "description": "Select the workspace folder to install to",
-      "options": [
-        "Mcp",
-        "MCP-v1"
-      ],
-      "default": "Mcp"
     }
   ]
 }

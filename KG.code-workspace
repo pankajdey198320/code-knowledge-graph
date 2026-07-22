@@ -7,12 +7,14 @@
 		{
 			"name": "KG — Python",
 			"path": "py"
+		},
+		{
 			"name": "KG — .NET",
 			"path": "dotnet"
 		},
 		{
-			"name": "Mcp",
-			"path": "../Mcp"
+			"name": "Kgh",
+			"path": "../../Deployment/MCP_server/KG"
 		}
 	],
 	"settings": {}

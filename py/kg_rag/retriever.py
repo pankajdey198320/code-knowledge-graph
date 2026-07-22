@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 from kg_rag.models import CodeEntityType, Entity, KnowledgeGraph, Relation
 
@@ -32,9 +32,10 @@ class GraphRetriever:
     def __init__(
         self,
         kg: KnowledgeGraph,
-        embedder: KGEmbedder | None = None,
+        embedder: 'KGEmbedder' | None = None,
         top_k: int = 5,
         hops: int = 2,
+        query_embed_fn: Optional[Callable[[str], object]] = None,
     ) -> None:
         self.kg = kg
         if embedder is None:
@@ -44,11 +45,46 @@ class GraphRetriever:
         self.embedder = embedder
         self.top_k = top_k
         self.hops = hops
+        # Optional function that accepts a single query string and returns a
+        # 1-D numpy embedding (dtype float32). When provided, the retriever
+        # will use this to compute query embeddings and then ask the
+        # embedder to perform similarity search using precomputed entity
+        # embeddings. This enables a hybrid mode: local query embeddings
+        # (sentence-transformers) + Ollama-based entity embeddings.
+        self.query_embed_fn = query_embed_fn
 
     def retrieve(self, query: str) -> RetrievedContext:
         # 1. Semantic entity search
-        similar = self.embedder.find_similar_entities(query, self.kg, top_k=self.top_k)
-        seed_entities = [ent for ent, _score in similar]
+        # Protect against recursive calls: if `retrieve` is invoked while a
+        # previous `retrieve` is still running (for example because
+        # `query_embed_fn` calls back into the retriever), avoid using the
+        # `query_embed_fn` to compute embeddings to prevent infinite recursion.
+        if getattr(self, "_in_retrieve", False):
+            # Already in a retrieve call — fall back to the embedder's
+            # string-to-embedding path which is less likely to recurse.
+            similar = self.embedder.find_similar_entities(query, self.kg, top_k=self.top_k)
+            seed_entities = [ent for ent, _score in similar]
+        else:
+            self._in_retrieve = True
+            try:
+                if self.query_embed_fn is not None:
+                    # Compute query embedding with the provided function and
+                    # search using the stored entity embeddings. Do not fall
+                    # back to the Ollama query path here: a failure should be
+                    # reported clearly instead of causing repeated remote
+                    # embedding requests.
+                    q_emb = self.query_embed_fn(query)
+                    similar = self.embedder.find_similar_entities_from_embedding(
+                        q_emb,
+                        self.kg,
+                        top_k=self.top_k,
+                    )
+                else:
+                    similar = self.embedder.find_similar_entities(query, self.kg, top_k=self.top_k)
+
+                seed_entities = [ent for ent, _score in similar]
+            finally:
+                self._in_retrieve = False
 
         # 2. Graph traversal
         all_relations: list[Relation] = []

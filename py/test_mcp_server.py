@@ -11,7 +11,7 @@ import anyio
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from kg_rag.mcp_server import _transport_security_for_host, graph_stats, main
+from kg_rag.mcp_server import _transport_security_for_host, graph_stats, main, search_code
 from kg_rag.models import (
     CodeEntityType,
     CodeRelationType,
@@ -20,6 +20,33 @@ from kg_rag.models import (
     KnowledgeGraph,
     Relation,
 )
+from kg_rag.retriever import GraphRetriever
+
+
+class _FakeEmbedder:
+    def find_similar_entities(self, _query: str, kg: KnowledgeGraph, top_k: int) -> list[tuple[Entity, float]]:
+        return [(entity, 1.0) for entity in kg.entities[:top_k]]
+
+
+def test_search_code_mcp_tool_returns_semantic_results(monkeypatch) -> None:
+    kg = KnowledgeGraph(
+        entities=[
+            Entity(
+                name="parse_json",
+                entity_type=CodeEntityType.FUNCTION,
+                file_path="src/utils.py",
+                line_start=10,
+                docstring="Parse JSON string",
+            ),
+        ]
+    )
+    retriever = GraphRetriever(kg=kg, embedder=_FakeEmbedder(), top_k=10, hops=1)
+    monkeypatch.setattr("kg_rag.mcp_server._ensure_retriever", lambda: retriever)
+
+    result = search_code("parse json", top_k=1)
+
+    assert "[function] parse_json" in result
+    assert "src/utils.py:10" in result
 
 
 def test_graph_stats_reports_history_and_work_items(monkeypatch) -> None:

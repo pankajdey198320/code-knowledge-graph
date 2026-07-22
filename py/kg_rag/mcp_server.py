@@ -62,13 +62,25 @@ def _transport_security_for_host(host: str) -> TransportSecuritySettings | None:
     instance is constructed. This module mutates the host later from CLI args,
     so we must keep the transport security settings in sync with that host.
     """
+    # Keep strict DNS rebinding protection for loopback hosts
     if host in ("127.0.0.1", "localhost", "::1"):
         return TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"],
             allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
         )
-    return None
+
+    # For explicit non-loopback hosts (e.g. server FQDN), allow that host so
+    # clients can connect without triggering "Invalid Host" checks. We
+    # deliberately disable DNS rebinding protection here because the operator
+    # explicitly chose the host to bind to.
+    allowed_hosts = [f"{host}:*"]
+    allowed_origins = [f"http://{host}:*", f"https://{host}:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
 
 
 def _cache_path_for(project: str) -> Path:
@@ -178,7 +190,47 @@ def _ensure_retriever(preload_embeddings: bool = False) -> GraphRetriever:
 
     kg = _load_graph()
     print("[kg-mcp] Loading embedding model (this may take 30-60 seconds on first run)...", file=sys.stderr)
+
+    # Prefer to compute query embeddings locally with sentence-transformers,
+    # but keep the KGEmbedder (Ollama/OpenAI) for entity embeddings. This
+    # hybrid approach avoids calling Ollama for queries while preserving the
+    # existing entity embedding/cache behavior.
     embedder = KGEmbedder()
+    query_embed_fn = None
+    try:
+        from sentence_transformers import SentenceTransformer
+        import numpy as _np
+
+        st_dir = settings.MODELS_DIR / "all-MiniLM-L6-v2"
+        if st_dir.exists():
+            st_model = SentenceTransformer(str(st_dir))
+        else:
+            st_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+        def _local_query_embed(query_str: str):
+            arr = st_model.encode([query_str], convert_to_numpy=True)
+            return _np.asarray(arr[0], dtype=_np.float32)
+
+        def _local_embed_fn(texts: list[str]):
+            arr = st_model.encode(texts, convert_to_numpy=True)
+            return _np.asarray(arr, dtype=_np.float32)
+
+        query_embed_fn = _local_query_embed
+
+        # Allow operator to opt into using local sentence-transformers for
+        # entity embeddings too (avoids any Ollama/OpenAI calls). Set
+        # KG_USE_LOCAL_EMBEDDINGS=1 in the environment to enable.
+        import os as _os
+        use_local_entities = _os.getenv("KG_USE_LOCAL_EMBEDDINGS", "").strip().lower() in ("1", "true", "yes")
+
+        if use_local_entities:
+            embedder = KGEmbedder(embed_fn=_local_embed_fn)
+            print("[kg-mcp] Using sentence-transformers for both query and entity embeddings (local mode).", file=sys.stderr)
+        else:
+            print("[kg-mcp] Using sentence-transformers for query embeddings (hybrid mode).", file=sys.stderr)
+    except Exception as e:
+        print(f"[kg-mcp] sentence-transformers not available or failed to load: {e}", file=sys.stderr)
+        print("[kg-mcp] Query embeddings will use the configured Ollama/OpenAI embedder.", file=sys.stderr)
     
     # Try to load cached embeddings
     embeddings_cache = embedding_cache_path_for(_active_project, _cache_path_for(_active_project).parent)
@@ -216,7 +268,7 @@ def _ensure_retriever(preload_embeddings: bool = False) -> GraphRetriever:
         print("[kg-mcp] Embeddings will be computed on-demand (first search may be slow).", file=sys.stderr)
         print("[kg-mcp] Set KG_PRELOAD_EMBEDDINGS=true to pre-compute all embeddings at startup.", file=sys.stderr)
     
-    _retriever = GraphRetriever(kg=kg, embedder=embedder)
+    _retriever = GraphRetriever(kg=kg, embedder=embedder, query_embed_fn=query_embed_fn)
     _embedder_loaded = True
     print("[kg-mcp] Embedder ready. Semantic search is now available.", file=sys.stderr)
     return _retriever
@@ -419,12 +471,19 @@ def search_code(query: str, top_k: int = 10, max_chars: int = _DEFAULT_TEXT_LIMI
     retriever = _ensure_retriever()
     if top_k != retriever.top_k:
         retriever = GraphRetriever(
-            kg=_get_kg(),
+            kg=retriever.kg,
             embedder=retriever.embedder,
+            query_embed_fn=getattr(retriever, "query_embed_fn", None),
             top_k=top_k,
             hops=retriever.hops,
         )
-    ctx = retriever.retrieve(query)
+    try:
+        ctx = retriever.retrieve(query)
+    except ValueError as exc:
+        return (
+            "Semantic search could not compare the query and graph embeddings. "
+            f"{exc}"
+        )
     return _truncate_text(ctx.subgraph_text, max_chars)
 
 
