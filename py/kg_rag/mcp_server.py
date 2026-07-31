@@ -400,6 +400,51 @@ mcp = FastMCP(
 )
 
 
+# --- Project activation middleware --------------------------------------
+class ProjectActivationMiddleware:
+    """ASGI middleware that activates a project based on a URL prefix.
+
+    Recognises paths like `/p/{project}/...` and `/projects/{project}/...`.
+    It calls the local `switch_project(project)` helper to ensure the
+    project's graph is loaded, then rewrites the ASGI `scope['path']`
+    to remove the prefix so existing handlers continue to operate.
+    """
+
+    def __init__(self, app, prefixes=('/p/', '/projects/')):
+        self.app = app
+        self.prefixes = prefixes
+
+    async def __call__(self, scope, receive, send):
+        # Only handle HTTP requests
+        if scope.get('type') != 'http':
+            await self.app(scope, receive, send)
+            return
+
+        path: str = scope.get('path', '')
+        for pfx in self.prefixes:
+            if path.startswith(pfx):
+                rest = path[len(pfx):]
+                # Extract project name (up to next slash)
+                parts = rest.split('/', 1)
+                project = parts[0]
+                new_path = '/' + parts[1] if len(parts) > 1 and parts[1] else '/'
+
+                try:
+                    # Synchronously switch project (this loads/indexes lazily)
+                    switch_project(project)
+                except Exception as exc:  # Don't fail the whole app on activation errors
+                    logger.exception("Project activation failed for %s: %s", project, exc)
+
+                # Mutate scope in-place so downstream apps see the trimmed path
+                scope['path'] = new_path
+                # Also update raw_path if present (bytes)
+                if 'raw_path' in scope and isinstance(scope['raw_path'], (bytes, bytearray)):
+                    scope['raw_path'] = new_path.encode('utf-8')
+                break
+
+        await self.app(scope, receive, send)
+
+
 # --- Tool: keyword search (fast) -----------------------------------------
 
 
@@ -1466,15 +1511,21 @@ def main(argv: Sequence[str] | None = None) -> None:
             f"POST http://{args.host}:{args.port}{message_url}",
             file=sys.stderr,
         )
-        mcp.run(transport="sse", mount_path=args.mount_path)
+        import uvicorn
+
+        app = ProjectActivationMiddleware(mcp.sse_app(mount_path=args.mount_path))
+        uvicorn.run(app, host=args.host, port=args.port)
         return
+
+    import uvicorn
 
     print(
         "[kg-mcp] Server ready on Streamable HTTP transport: "
         f"http://{args.host}:{args.port}{args.streamable_http_path}",
         file=sys.stderr,
     )
-    mcp.run(transport="streamable-http")
+    app = ProjectActivationMiddleware(mcp.streamable_http_app())
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

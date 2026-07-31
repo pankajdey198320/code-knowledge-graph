@@ -35,7 +35,7 @@ dependencies = [
     # LLM (Ollama via OpenAI-compatible client)
     "openai>=1.0",
     # MCP server
-    "mcp[cli]>=1.0",
+    "mcp[cli]>=1.0,<2",
     # Core
     "pydantic>=2.0",
     "python-dotenv>=1.0",

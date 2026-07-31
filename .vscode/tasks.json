@@ -71,6 +71,30 @@
       }
     },
     {
+      "label": "Test Multi-project MCP endpoints",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/py/test_multi_project_endpoints.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/py"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    },
+    {
       "label": "Clean Build Artifacts",
       "type": "shell",
       "command": "Remove-Item",
