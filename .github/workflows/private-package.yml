@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    # Also trigger when a version tag is pushed (e.g. v1.2.3)
+    tags:
+      - 'v*'
   pull_request:
   workflow_dispatch:
     inputs:
@@ -58,7 +61,8 @@ jobs:
   publish:
     needs: build
     runs-on: windows-latest
-    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    # Run when manually dispatched with publish=true OR automatically on tag pushes
+    if: (github.event_name == 'workflow_dispatch' && inputs.publish) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))
     environment: private-package-feed
 
     steps:
