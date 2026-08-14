@@ -40,22 +40,25 @@ jobs:
         run: python -m pip install --upgrade pip
 
       - name: Install project with dev dependencies
-        run: pip install -e .[dev]
+        run: pip install -e ./py[dev]
 
       - name: Run focused tests
+        working-directory: py
         run: python -m pytest test_projects_config.py
 
       - name: Build distributions
+        working-directory: py
         run: python -m build
 
       - name: Validate distributions
+        working-directory: py
         run: python -m twine check dist/*
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: python-package-dist
-          path: dist/*
+          path: py/dist/*
           if-no-files-found: error
 
   publish:
